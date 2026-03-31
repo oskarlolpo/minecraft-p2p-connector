@@ -3,7 +3,11 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use anyhow::{anyhow, Context, Result};
 use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS};
 use serde::{Deserialize, Serialize};
-use tokio::{net::UdpSocket, sync::mpsc, time::timeout};
+use tokio::{
+    net::{lookup_host, UdpSocket},
+    sync::mpsc,
+    time::timeout,
+};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -153,9 +157,11 @@ pub async fn discover_public_addr(
 async fn discover_public_addr_via_stun(socket: Arc<UdpSocket>, server: &str) -> Result<SocketAddr> {
     let request = build_stun_binding_request();
     let mut buffer = [0u8; 1024];
-    let server_addr: SocketAddr = server
-        .parse()
-        .with_context(|| format!("invalid STUN server address: {server}"))?;
+    let server_addr = lookup_host(server)
+        .await
+        .with_context(|| format!("failed to resolve STUN server: {server}"))?
+        .find(SocketAddr::is_ipv4)
+        .ok_or_else(|| anyhow!("no IPv4 STUN address resolved for {server}"))?;
 
     for _ in 0..4 {
         socket.send_to(&request, server_addr).await?;

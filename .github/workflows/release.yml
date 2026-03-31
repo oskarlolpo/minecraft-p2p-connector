@@ -15,6 +15,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Sync app version from tag
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          (Get-Content package.json -Raw) -replace '"version":\s*"[^"]+"', "`"version`": `"$version`"" | Set-Content package.json
+          (Get-Content src-tauri/Cargo.toml -Raw) -replace '(?m)^version = ".*"$', "version = `"$version`"" | Set-Content src-tauri/Cargo.toml
+          (Get-Content src-tauri/tauri.conf.json -Raw) -replace '"version":\s*"[^"]+"', "`"version`": `"$version`"" | Set-Content src-tauri/tauri.conf.json
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
