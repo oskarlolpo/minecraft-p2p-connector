@@ -33,6 +33,11 @@ const CLIENT_LOCAL_BIND_ADDR: &str = "127.0.0.1:25565";
 const RELAY_BOOTSTRAPS_ENV: &str = "MC_LIBP2P_RELAYS";
 const SIGNALING_LABEL: &str = "Ably Presence (PeerId + Multiaddr)";
 const MAX_LOG_LINES: usize = 240;
+const DEFAULT_RELAY_BOOTSTRAPS: &[&str] = &[
+    "/ip4/147.75.109.213/tcp/4001/p2p/QmNnoo2mRwtCh7MSbdESTvFfT6fA9Snd97Jp1HgrfQd6tZ",
+    "/ip4/145.40.89.195/tcp/4001/p2p/QmZRnm9AnpE966pX1fRj1SskXbY9yv948U8pZcbaXfLnoU",
+];
+const BOOTSTRAP_READY_TIMEOUT_SECS: u64 = 8;
 
 #[derive(NetworkBehaviour)]
 #[behaviour(prelude = "libp2p_swarm::derive_prelude", to_swarm = "ConnectorEvent")]
@@ -358,6 +363,7 @@ async fn spawn_swarm_runtime(
     swarm
         .listen_on("/ip4/0.0.0.0/udp/0/quic-v1".parse()?)
         .context("не удалось открыть libp2p QUIC listener")?;
+    let initial_listen_addrs = current_listen_addrs(&swarm);
 
     let cancel = CancellationToken::new();
     let active_peer = Arc::new(RwLock::new(None));
@@ -415,11 +421,11 @@ async fn spawn_swarm_runtime(
         .await;
     }));
 
-    let bootstrap = match timeout(Duration::from_secs(3), ready_rx).await {
+    let bootstrap = match timeout(Duration::from_secs(BOOTSTRAP_READY_TIMEOUT_SECS), ready_rx).await {
         Ok(Ok(bootstrap)) => bootstrap,
         Ok(Err(_)) | Err(_) => SwarmBootstrap {
             peer_id: local_peer_id.to_string(),
-            listen_addrs: Vec::new(),
+            listen_addrs: initial_listen_addrs,
             relay_addrs: relay_addr_strings,
             nat_status: "unknown".into(),
             local_game_port: config.host_local_port,
@@ -484,7 +490,7 @@ async fn run_swarm_actor(
     let mut relay_reservations = HashSet::new();
     let mut ready_tx = Some(ready_tx);
 
-    if config.mode == SessionMode::Host && !relay_bootstraps.is_empty() {
+    if !relay_bootstraps.is_empty() {
         if let Err(error) = ensure_relay_reservations(
             &mut swarm,
             &relay_bootstraps,
@@ -660,23 +666,20 @@ async fn handle_swarm_event(
                 );
             }
 
-            if let Some(sender) = ready_tx.take() {
-                let listen_addrs = status_guard
-                    .udp_bind_addr
-                    .iter()
-                    .cloned()
-                    .chain(status_guard.public_udp_addr.iter().cloned())
-                    .collect::<Vec<_>>();
-                let _ = sender.send(SwarmBootstrap {
-                    peer_id: swarm.local_peer_id().to_string(),
-                    listen_addrs,
-                    relay_addrs: relay_bootstraps.iter().map(ToString::to_string).collect(),
-                    nat_status: status_guard
-                        .note
-                        .clone()
-                        .unwrap_or_else(|| "unknown".into()),
-                    local_game_port: config.host_local_port,
-                });
+            if should_publish_bootstrap_addr(&address, relay_bootstraps) {
+                if let Some(sender) = ready_tx.take() {
+                    let listen_addrs = current_listen_addrs(swarm);
+                    let _ = sender.send(SwarmBootstrap {
+                        peer_id: swarm.local_peer_id().to_string(),
+                        listen_addrs,
+                        relay_addrs: relay_bootstraps.iter().map(ToString::to_string).collect(),
+                        nat_status: status_guard
+                            .note
+                            .clone()
+                            .unwrap_or_else(|| "unknown".into()),
+                        local_game_port: config.host_local_port,
+                    });
+                }
             }
         }
         SwarmEvent::ExternalAddrConfirmed { address } => {
@@ -1077,14 +1080,25 @@ fn mark_peer_disconnected(status: &mut NetworkStatus, peer_id: PeerId) {
 }
 
 fn load_relay_bootstraps() -> Result<Vec<Multiaddr>> {
+    let mut values = DEFAULT_RELAY_BOOTSTRAPS
+        .iter()
+        .map(|entry| entry.to_string())
+        .collect::<Vec<_>>();
     let value = std::env::var(RELAY_BOOTSTRAPS_ENV).unwrap_or_default();
-    if value.trim().is_empty() {
-        return Ok(Vec::new());
-    }
+    values.extend(
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(ToOwned::to_owned),
+    );
 
-    value
-        .split(',')
-        .map(str::trim)
+    values.sort();
+    values.dedup();
+
+    values
+        .into_iter()
+        .map(|entry| entry.trim().to_owned())
         .filter(|entry| !entry.is_empty())
         .map(|entry| {
             entry
@@ -1092,6 +1106,21 @@ fn load_relay_bootstraps() -> Result<Vec<Multiaddr>> {
                 .with_context(|| format!("не удалось распарсить relay multiaddr: {entry}"))
         })
         .collect()
+}
+
+fn current_listen_addrs(swarm: &Swarm<ConnectorBehaviour>) -> Vec<String> {
+    swarm
+        .listeners()
+        .map(ToString::to_string)
+        .filter(|addr| {
+            addr.contains("/p2p-circuit")
+                || (!addr.contains("/ip4/0.0.0.0/") && !addr.contains("/ip6/::/"))
+        })
+        .collect()
+}
+
+fn should_publish_bootstrap_addr(address: &Multiaddr, relay_bootstraps: &[Multiaddr]) -> bool {
+    relay_bootstraps.is_empty() || is_relay_addr(address)
 }
 
 fn peer_id_from_multiaddr(addr: &Multiaddr) -> Option<PeerId> {
