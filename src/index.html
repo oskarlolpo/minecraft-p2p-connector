@@ -65,6 +65,15 @@
             <div class="mini-value" id="selected-server">No selection</div>
           </div>
 
+          <div class="mini-panel mt-4">
+            <span class="panel-label">Selected Target</span>
+            <span id="selected-endpoint" class="mini-value break-all">n/a</span>
+            <div class="mt-3 flex gap-3">
+              <button id="copy-selected-endpoint" class="ghost-button flex-1 px-3 py-2 text-xs">Copy IP</button>
+              <button id="connect-selected" class="primary-button flex-1 px-3 py-2 text-xs">Connect Selected</button>
+            </div>
+          </div>
+
           <div id="server-list" class="mt-4 space-y-3"></div>
         </section>
 
