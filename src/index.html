@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Minecraft P2P Connector</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="min-h-screen bg-ink text-white antialiased">
+    <main class="mx-auto flex min-h-screen max-w-6xl flex-col px-6 py-8 lg:px-10">
+      <header class="mb-8 flex items-center justify-between">
+        <div>
+          <p class="text-xs uppercase tracking-[0.3em] text-cyanedge/80">Minecraft Java</p>
+          <h1 class="mt-2 text-3xl font-semibold tracking-tight text-white lg:text-5xl">
+            P2P LAN Connector
+          </h1>
+        </div>
+        <div class="panel px-4 py-3 text-right">
+          <p class="text-[11px] uppercase tracking-[0.28em] text-white/45">Status</p>
+          <p id="status-chip" class="mt-2 text-sm font-medium text-cyanedge">Idle</p>
+        </div>
+      </header>
+
+      <section class="grid flex-1 gap-6 lg:grid-cols-[1.4fr_0.8fr]">
+        <div class="panel relative overflow-hidden p-8">
+          <div class="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent"></div>
+
+          <section data-view="main" class="view space-y-8">
+            <div class="max-w-2xl">
+              <p class="text-sm uppercase tracking-[0.28em] text-white/40">Direct UDP Hole Punching</p>
+              <h2 class="mt-4 text-3xl font-semibold text-white lg:text-4xl">
+                Локальный Minecraft-трафик через QUIC без TAP/TUN и виртуальных сетей.
+              </h2>
+              <p class="mt-4 text-base leading-7 text-mist">
+                Хост публикует room code, клиент подключается к нему и заходит в Minecraft на
+                <span class="font-semibold text-white">localhost</span>. Внутри приложения TCP трафик
+                сервера инкапсулируется в QUIC-стримы поверх пробитого UDP.
+              </p>
+            </div>
+
+            <div class="grid gap-4 sm:grid-cols-2">
+              <button id="host-button" class="action-card group">
+                <span class="action-kicker">Host</span>
+                <span class="mt-3 block text-2xl font-semibold text-white">Host Game</span>
+                <span class="mt-3 block text-sm leading-6 text-mist">
+                  Создать комнату, получить код и ждать прямые подключения клиентов.
+                </span>
+              </button>
+
+              <button id="connect-button" class="action-card group action-card-secondary">
+                <span class="action-kicker">Client</span>
+                <span class="mt-3 block text-2xl font-semibold text-white">Connect</span>
+                <span class="mt-3 block text-sm leading-6 text-mist">
+                  Ввести code, поднять локальный proxy на 127.0.0.1:25565 и играть через localhost.
+                </span>
+              </button>
+            </div>
+          </section>
+
+          <section data-view="host" class="view hidden space-y-6">
+            <div class="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <p class="text-xs uppercase tracking-[0.28em] text-white/40">Host Session</p>
+                <h2 class="mt-2 text-3xl font-semibold text-white">Комната открыта</h2>
+              </div>
+              <button data-back class="rounded-full border border-white/15 px-4 py-2 text-sm text-white/70 transition hover:border-white/30 hover:text-white">
+                Назад
+              </button>
+            </div>
+
+            <div class="grid gap-4 md:grid-cols-[1.2fr_0.8fr]">
+              <div class="glass-panel">
+                <p class="text-[11px] uppercase tracking-[0.28em] text-white/40">Room Code</p>
+                <div class="mt-4 flex items-center gap-3">
+                  <p id="room-code" class="text-4xl font-semibold tracking-[0.24em] text-cyanedge">------</p>
+                  <button id="copy-room-code" class="rounded-full border border-cyanedge/25 px-4 py-2 text-sm text-cyanedge transition hover:border-cyanedge/60 hover:bg-cyanedge/10">
+                    Copy
+                  </button>
+                </div>
+                <p id="host-note" class="mt-4 text-sm text-mist">Ожидание peer'ов.</p>
+              </div>
+
+              <div class="glass-panel">
+                <p class="text-[11px] uppercase tracking-[0.28em] text-white/40">Connected</p>
+                <p id="peer-count" class="mt-4 text-5xl font-semibold text-white">0</p>
+                <p class="mt-3 text-sm text-mist">Активные QUIC peer-сессии внутри этой комнаты.</p>
+              </div>
+            </div>
+
+            <div class="glass-panel">
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="text-[11px] uppercase tracking-[0.28em] text-white/40">Peers</p>
+                  <p class="mt-2 text-sm text-mist">Текущие подключения, адреса и RTT.</p>
+                </div>
+                <p id="host-endpoint" class="text-sm text-white/50">UDP: n/a</p>
+              </div>
+              <div id="peer-list" class="mt-5 space-y-3"></div>
+            </div>
+          </section>
+
+          <section data-view="connect" class="view hidden space-y-6">
+            <div class="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <p class="text-xs uppercase tracking-[0.28em] text-white/40">Client Session</p>
+                <h2 class="mt-2 text-3xl font-semibold text-white">Подключение к хосту</h2>
+              </div>
+              <button data-back class="rounded-full border border-white/15 px-4 py-2 text-sm text-white/70 transition hover:border-white/30 hover:text-white">
+                Назад
+              </button>
+            </div>
+
+            <div class="grid gap-4 md:grid-cols-[1.1fr_0.9fr]">
+              <div class="glass-panel">
+                <label for="room-code-input" class="text-[11px] uppercase tracking-[0.28em] text-white/40">
+                  Room Code
+                </label>
+                <input
+                  id="room-code-input"
+                  maxlength="6"
+                  placeholder="ABC123"
+                  class="mt-4 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-2xl uppercase tracking-[0.22em] text-white outline-none transition placeholder:text-white/20 focus:border-cyanedge/60 focus:bg-white/10"
+                />
+                <button id="connect-submit" class="mt-4 inline-flex items-center rounded-full bg-cyanedge px-6 py-3 text-sm font-semibold uppercase tracking-[0.18em] text-slate-950 transition hover:bg-cyanedge/90">
+                  Connect
+                </button>
+                <p class="mt-4 text-sm text-mist">
+                  После соединения открывайте Minecraft и заходите на
+                  <span class="font-semibold text-white">localhost</span>.
+                </p>
+              </div>
+
+              <div class="glass-panel">
+                <p class="text-[11px] uppercase tracking-[0.28em] text-white/40">Transport</p>
+                <p id="connect-stage" class="mt-4 text-2xl font-semibold text-white">Idle</p>
+                <p id="connect-note" class="mt-3 text-sm leading-6 text-mist">
+                  Приложение ждёт room code и затем поднимет локальный proxy.
+                </p>
+                <p id="connect-endpoint" class="mt-4 text-sm text-white/50">UDP: n/a</p>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <aside class="panel flex flex-col justify-between p-6">
+          <div>
+            <p class="text-xs uppercase tracking-[0.28em] text-white/40">Telemetry</p>
+            <div class="mt-4 space-y-4">
+              <div class="rounded-2xl border border-white/8 bg-white/4 p-4">
+                <p class="text-[11px] uppercase tracking-[0.24em] text-white/35">Signal Server</p>
+                <p id="signaling-server" class="mt-2 break-all text-sm text-white/80">n/a</p>
+              </div>
+              <div class="rounded-2xl border border-white/8 bg-white/4 p-4">
+                <p class="text-[11px] uppercase tracking-[0.24em] text-white/35">Last Error</p>
+                <p id="error-text" class="mt-2 min-h-[40px] text-sm leading-6 text-amber-300/90">None</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="rounded-2xl border border-cyanedge/12 bg-cyanedge/6 p-4">
+            <p class="text-[11px] uppercase tracking-[0.24em] text-cyanedge/75">Flow</p>
+            <p class="mt-3 text-sm leading-6 text-white/75">
+              Signaling only coordinates room code and NAT metadata. Игровой трафик идёт напрямую
+              peer-to-peer по QUIC.
+            </p>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
