@@ -1,7 +1,7 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
-use quinn::{Connection, Endpoint, EndpointConfig};
+use quinn::{Connection, Endpoint, EndpointConfig, VarInt};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::{
@@ -19,7 +19,7 @@ use crate::{
     signaling::{discover_public_addr, punch_remote, SignalingConfig},
 };
 
-use super::proxy;
+use super::{minecraft, proxy};
 
 const ABLY_SIGNAL_LABEL: &str = "Ably Presence + Channels";
 
@@ -43,7 +43,7 @@ struct SessionRuntime {
 
 enum SessionControl {
     Host(HostControl),
-    Client,
+    Client(ClientControl),
 }
 
 struct HostControl {
@@ -51,6 +51,12 @@ struct HostControl {
     room_name: String,
     peer_id: String,
     local_game_port: u16,
+    expected_peers: Arc<RwLock<HashMap<SocketAddr, String>>>,
+    live_connections: Arc<Mutex<HashMap<String, Connection>>>,
+}
+
+struct ClientControl {
+    peer_addr: SocketAddr,
 }
 
 #[derive(Clone, Serialize)]
@@ -74,7 +80,7 @@ impl NetworkManager {
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             ..Default::default()
         };
-        status.logs.push("Blood Paradise Hub запущен.".into());
+        status.logs.push("Minecraft P2P Connector запущен.".into());
 
         Self {
             inner: Arc::new(Inner {
@@ -99,10 +105,10 @@ impl NetworkManager {
     ) -> Result<String> {
         let room_name = room_name.trim().to_string();
         if room_name.is_empty() {
-            return Err(anyhow!("room name must not be empty"));
+            return Err(anyhow!("имя комнаты не должно быть пустым"));
         }
         if local_port == 0 {
-            return Err(anyhow!("local game port must be greater than 0"));
+            return Err(anyhow!("порт локальной игры должен быть больше 0"));
         }
 
         let _guard = self.inner.control.lock().await;
@@ -127,24 +133,57 @@ impl NetworkManager {
         Ok(())
     }
 
-    pub async fn connect_to_peer(&self, app: AppHandle, peer_addr: String) -> Result<()> {
+    pub async fn connect_to_peer(
+        &self,
+        app: AppHandle,
+        peer_addr: String,
+        peer_id: Option<String>,
+    ) -> Result<()> {
         let peer_addr = peer_addr.trim().to_string();
         if peer_addr.is_empty() {
-            return Err(anyhow!("peer address must not be empty"));
+            return Err(anyhow!("адрес peer не должен быть пустым"));
         }
 
         let peer_addr: SocketAddr = peer_addr
             .parse()
-            .with_context(|| format!("invalid peer socket address: {peer_addr}"))?;
+            .with_context(|| format!("неверный socket address: {peer_addr}"))?;
 
         let _guard = self.inner.control.lock().await;
 
-        if self.punch_from_host(peer_addr).await? {
+        if self.punch_from_host(peer_addr, peer_id.clone()).await? {
             return Ok(());
         }
 
         self.reset_session().await;
         self.start_client_connect(app, peer_addr).await
+    }
+
+    pub async fn kick_peer(&self, peer_id: String) -> Result<()> {
+        let _guard = self.inner.control.lock().await;
+
+        let live_connections = {
+            let session = self.inner.session.lock().await;
+            let runtime = session
+                .as_ref()
+                .ok_or_else(|| anyhow!("активной сессии нет"))?;
+
+            let SessionControl::Host(host) = &runtime.control else {
+                return Err(anyhow!("выгнать игрока можно только из режима хоста"));
+            };
+
+            host.live_connections.clone()
+        };
+
+        let connection = live_connections.lock().await.remove(&peer_id);
+        let Some(connection) = connection else {
+            return Err(anyhow!("игрок {peer_id} не найден среди активных подключений"));
+        };
+
+        connection.close(VarInt::from_u32(1), b"kicked-by-host");
+        self.mark_peer_disconnected(&peer_id).await;
+        self.push_log(format!("Игрок {peer_id} отключён хостом."))
+            .await;
+        Ok(())
     }
 
     async fn start_hosting_inner(
@@ -154,18 +193,33 @@ impl NetworkManager {
         local_port: u16,
     ) -> Result<String> {
         let peer_id = Uuid::new_v4().to_string();
-        let peer_map = Arc::new(RwLock::new(HashMap::<SocketAddr, String>::new()));
+        let expected_peers = Arc::new(RwLock::new(HashMap::<SocketAddr, String>::new()));
+        let live_connections = Arc::new(Mutex::new(HashMap::<String, Connection>::new()));
+        let has_password = password.is_some();
 
         self.overwrite_status(NetworkStatus {
             mode: SessionMode::Host,
             state: ConnectionState::Starting,
             room_code: Some(room_name.clone()),
+            local_game_port: Some(local_port),
+            password_protected: has_password,
             signaling_server: ABLY_SIGNAL_LABEL.into(),
-            note: Some("Поднимаю host endpoint и вычисляю внешний UDP адрес.".into()),
+            note: Some("Поднимаю host endpoint и запрашиваю локальную версию Minecraft.".into()),
             logs: vec![format!("Host стартует: {room_name}")],
             ..Default::default()
         })
         .await;
+
+        let minecraft_version = match minecraft::detect_local_version(local_port).await {
+            Ok(version) => Some(version),
+            Err(error) => {
+                self.push_log(format!(
+                    "Не удалось определить версию Minecraft на 127.0.0.1:{local_port}: {error:#}"
+                ))
+                .await;
+                None
+            }
+        };
 
         let (udp_socket, punch_socket, udp_bind_addr) = Self::bind_shared_udp_socket()?;
         let public_udp_addr = discover_public_addr(punch_socket.clone(), &self.inner.stun).await?;
@@ -176,7 +230,7 @@ impl NetworkManager {
             udp_socket,
             Arc::new(quinn::TokioRuntime),
         )
-        .context("failed to create host QUIC endpoint")?;
+        .context("не удалось создать host QUIC endpoint")?;
 
         self.overwrite_status(NetworkStatus {
             mode: SessionMode::Host,
@@ -184,14 +238,15 @@ impl NetworkManager {
             room_code: Some(room_name.clone()),
             udp_bind_addr: Some(udp_bind_addr.to_string()),
             public_udp_addr: Some(public_udp_addr.to_string()),
+            local_game_port: Some(local_port),
+            minecraft_version: minecraft_version.clone(),
+            password_protected: has_password,
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             note: Some(format!(
-                "Host активен. Комната: {room_name}. LAN порт: {local_port}. {}",
-                if password.is_some() {
-                    "Лобби защищено паролем."
-                } else {
-                    "Лобби открыто."
-                }
+                "Хост активен. Комната: {room_name}. Локальный порт: {local_port}. Версия: {}.",
+                minecraft_version
+                    .clone()
+                    .unwrap_or_else(|| "Неизвестно".into())
             )),
             logs: vec![
                 format!("Публичный UDP адрес: {public_udp_addr}"),
@@ -203,8 +258,13 @@ impl NetworkManager {
         .await;
 
         let cancel = CancellationToken::new();
-        let accept_task =
-            self.spawn_host_accept_loop(endpoint, peer_map, local_port, cancel.clone());
+        let accept_task = self.spawn_host_accept_loop(
+            endpoint,
+            expected_peers.clone(),
+            live_connections.clone(),
+            local_port,
+            cancel.clone(),
+        );
 
         *self.inner.session.lock().await = Some(SessionRuntime {
             cancel,
@@ -214,13 +274,19 @@ impl NetworkManager {
                 room_name,
                 peer_id,
                 local_game_port: local_port,
+                expected_peers,
+                live_connections,
             }),
         });
 
         Ok(public_udp_addr.to_string())
     }
 
-    async fn punch_from_host(&self, peer_addr: SocketAddr) -> Result<bool> {
+    async fn punch_from_host(
+        &self,
+        peer_addr: SocketAddr,
+        announced_peer_id: Option<String>,
+    ) -> Result<bool> {
         let session = self.inner.session.lock().await;
         let Some(runtime) = session.as_ref() else {
             return Ok(false);
@@ -235,18 +301,27 @@ impl NetworkManager {
         let room_name = host.room_name.clone();
         let peer_id = host.peer_id.clone();
         let local_game_port = host.local_game_port;
+        let expected_peers = host.expected_peers.clone();
         drop(session);
+
+        let display_peer = announced_peer_id
+            .clone()
+            .unwrap_or_else(|| peer_addr.to_string());
+        if let Some(peer_id) = announced_peer_id {
+            expected_peers.write().await.insert(peer_addr, peer_id);
+        }
 
         self.mutate_status(|status| {
             status.state = ConnectionState::Punching;
             status.note = Some(format!(
-                "Пробиваю UDP до клиента {peer_addr}. Игра слушается на 127.0.0.1:{local_game_port}."
+                "Пробиваю UDP до клиента {display_peer}. Игра слушается на 127.0.0.1:{local_game_port}."
             ));
         })
         .await;
-        self.upsert_peer(peer_addr.to_string(), peer_addr, false, None)
+        self.upsert_peer(display_peer.clone(), peer_addr, false, None)
             .await;
-        self.push_log(format!("Host punch -> {peer_addr}")).await;
+        self.push_log(format!("Host punch -> {display_peer} ({peer_addr})"))
+            .await;
 
         tokio::spawn(async move {
             let _ = punch_remote(socket, peer_addr, &room_name, &peer_id, cancel).await;
@@ -262,7 +337,7 @@ impl NetworkManager {
         *self.inner.session.lock().await = Some(SessionRuntime {
             cancel,
             tasks: vec![task],
-            control: SessionControl::Client,
+            control: SessionControl::Client(ClientControl { peer_addr }),
         });
 
         Ok(())
@@ -285,7 +360,7 @@ impl NetworkManager {
                         "tunnel_failed",
                         TunnelFailedEvent {
                             peer_addr: peer_addr.to_string(),
-                            reason: "Failed to punch through NAT.".into(),
+                            reason: "Не удалось пробить NAT и установить туннель.".into(),
                         },
                     );
                     manager.mark_fatal(SessionMode::Client, None, &error).await;
@@ -306,7 +381,7 @@ impl NetworkManager {
             mode: SessionMode::Client,
             state: ConnectionState::Starting,
             signaling_server: ABLY_SIGNAL_LABEL.into(),
-            note: Some("Подготавливаю client endpoint и узнаю внешний UDP адрес.".into()),
+            note: Some("Подготавливаю клиентский endpoint и вычисляю внешний UDP адрес.".into()),
             logs: vec![format!("Client target: {peer_addr}")],
             ..Default::default()
         })
@@ -321,7 +396,7 @@ impl NetworkManager {
             udp_socket,
             Arc::new(quinn::TokioRuntime),
         )
-        .context("failed to create client QUIC endpoint")?;
+        .context("не удалось создать client QUIC endpoint")?;
         endpoint.set_default_client_config(build_insecure_client_config()?);
 
         self.overwrite_status(NetworkStatus {
@@ -330,7 +405,7 @@ impl NetworkManager {
             udp_bind_addr: Some(udp_bind_addr.to_string()),
             public_udp_addr: Some(public_udp_addr.to_string()),
             signaling_server: ABLY_SIGNAL_LABEL.into(),
-            note: Some("Локальный клиент готов. Отправляю handshake и жду punch от хоста.".into()),
+            note: Some("Клиент готов. Отправляю handshake и жду ответ от хоста.".into()),
             peers: vec![PeerInfo {
                 peer_id: peer_id.clone(),
                 addr: peer_addr.to_string(),
@@ -348,7 +423,7 @@ impl NetworkManager {
         let punch_handle = tokio::spawn({
             let socket = punch_socket.clone();
             let cancel = cancel.clone();
-            let room = "blood-paradise".to_string();
+            let room = "minecraft-p2p-connector".to_string();
             let peer = peer_id.clone();
             async move {
                 let _ = punch_remote(socket, peer_addr, &room, &peer, cancel).await;
@@ -364,15 +439,16 @@ impl NetworkManager {
             .await
             .with_context(|| {
                 format!(
-                    "failed to bind local proxy on {}. Minecraft or another app may already use it",
+                    "не удалось открыть локальный прокси на {}. Порт уже занят",
                     proxy::MINECRAFT_LOCAL_ADDR
                 )
             })?;
 
         self.mutate_status(|status| {
             status.state = ConnectionState::Connected;
-            status.note =
-                Some("Соединение установлено. Подключайтесь в Minecraft к localhost:25565.".into());
+            status.note = Some(
+                "Соединение установлено. Подключайтесь в Minecraft к localhost:25565.".into(),
+            );
             status.peers = vec![PeerInfo {
                 peer_id: peer_id.clone(),
                 addr: peer_addr.to_string(),
@@ -381,7 +457,8 @@ impl NetworkManager {
             }];
         })
         .await;
-        self.push_log("Proxy на 127.0.0.1:25565 поднят.".into()).await;
+        self.push_log("Локальный proxy на 127.0.0.1:25565 поднят.".into())
+            .await;
         let _ = app.emit(
             "tunnel_established",
             TunnelEstablishedEvent {
@@ -408,7 +485,8 @@ impl NetworkManager {
     fn spawn_host_accept_loop(
         &self,
         endpoint: Endpoint,
-        peer_map: Arc<RwLock<HashMap<SocketAddr, String>>>,
+        expected_peers: Arc<RwLock<HashMap<SocketAddr, String>>>,
+        live_connections: Arc<Mutex<HashMap<String, Connection>>>,
         local_game_port: u16,
         cancel: CancellationToken,
     ) -> JoinHandle<()> {
@@ -427,13 +505,16 @@ impl NetworkManager {
                 match incoming.await {
                     Ok(connection) => {
                         let remote = connection.remote_address();
-                        let peer_id = peer_map
-                            .read()
+                        let peer_id = expected_peers
+                            .write()
                             .await
-                            .get(&remote)
-                            .cloned()
+                            .remove(&remote)
                             .unwrap_or_else(|| remote.to_string());
 
+                        live_connections
+                            .lock()
+                            .await
+                            .insert(peer_id.clone(), connection.clone());
                         manager
                             .upsert_peer(
                                 peer_id.clone(),
@@ -448,11 +529,13 @@ impl NetworkManager {
 
                         let connection_cancel = cancel.clone();
                         let connection_manager = manager.clone();
+                        let live_connections = live_connections.clone();
                         tokio::spawn(async move {
                             connection_manager
                                 .handle_host_connection(
                                     connection,
                                     peer_id,
+                                    live_connections,
                                     local_game_port,
                                     connection_cancel,
                                 )
@@ -488,11 +571,17 @@ impl NetworkManager {
                 match incoming {
                     Ok((tcp_stream, _)) => {
                         let conn = connection.clone();
+                        let manager = manager.clone();
                         tokio::spawn(async move {
                             if let Err(error) =
                                 NetworkManager::handle_client_proxy_connection(conn, tcp_stream)
                                     .await
                             {
+                                manager
+                                    .set_nonfatal(format!(
+                                        "локальный TCP->QUIC proxy завершился ошибкой: {error:#}"
+                                    ))
+                                    .await;
                                 tracing::warn!("client proxy stream failed: {error:#}");
                             }
                         });
@@ -561,6 +650,7 @@ impl NetworkManager {
         &self,
         connection: Connection,
         peer_id: String,
+        live_connections: Arc<Mutex<HashMap<String, Connection>>>,
         local_game_port: u16,
         cancel: CancellationToken,
     ) {
@@ -593,6 +683,7 @@ impl NetworkManager {
             }
         }
 
+        live_connections.lock().await.remove(&peer_id);
         ping_task.abort();
         self.mark_peer_disconnected(&peer_id).await;
     }
@@ -622,7 +713,7 @@ impl NetworkManager {
         }
 
         let (send, recv) = opened_stream.ok_or_else(|| {
-            last_error.unwrap_or_else(|| anyhow!("failed to open QUIC stream to host"))
+            last_error.unwrap_or_else(|| anyhow!("не удалось открыть QUIC stream до хоста"))
         })?;
 
         proxy::bridge_client_tcp_to_quic(tcp_stream, send, recv).await
@@ -638,7 +729,7 @@ impl NetworkManager {
 
         for attempt in 1..=4 {
             if cancel.is_cancelled() {
-                return Err(anyhow!("connection attempt cancelled"));
+                return Err(anyhow!("подключение отменено"));
             }
 
             self.mutate_status(|status| {
@@ -649,7 +740,7 @@ impl NetworkManager {
 
             let connect = endpoint
                 .connect(peer_addr, "localhost")
-                .context("failed to start QUIC connect")?;
+                .context("не удалось запустить QUIC connect")?;
 
             match timeout(Duration::from_millis(1250), connect).await {
                 Ok(Ok(connection)) => return Ok(connection),
@@ -660,7 +751,7 @@ impl NetworkManager {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
 
-        Err(last_error.unwrap_or_else(|| anyhow!("unable to establish QUIC session")))
+        Err(last_error.unwrap_or_else(|| anyhow!("не удалось установить QUIC session")))
     }
 
     fn bind_shared_udp_socket() -> Result<(std::net::UdpSocket, Arc<UdpSocket>, SocketAddr)> {
@@ -675,6 +766,20 @@ impl NetworkManager {
         let mut session = self.inner.session.lock().await;
         if let Some(runtime) = session.take() {
             runtime.cancel.cancel();
+
+            match runtime.control {
+                SessionControl::Host(host) => {
+                    let mut live_connections = host.live_connections.lock().await;
+                    for (_, connection) in live_connections.drain() {
+                        connection.close(VarInt::from_u32(0), b"session-reset");
+                    }
+                }
+                SessionControl::Client(client) => {
+                    self.push_log(format!("Клиентская сессия с {} очищена.", client.peer_addr))
+                        .await;
+                }
+            }
+
             for task in runtime.tasks {
                 task.abort();
             }
@@ -761,7 +866,7 @@ impl NetworkManager {
 
             if status.mode == SessionMode::Host {
                 status.state = ConnectionState::Hosting;
-                status.note = Some("Peer отключился, host остаётся активным.".into());
+                status.note = Some("Игрок отключился, хост остаётся активным.".into());
             }
         })
         .await;

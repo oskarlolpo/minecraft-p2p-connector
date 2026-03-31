@@ -46,10 +46,20 @@ async fn connect_to_peer(
     app: AppHandle,
     state: State<'_, AppState>,
     peer_addr: String,
+    peer_id: Option<String>,
 ) -> Result<(), String> {
     state
         .manager
-        .connect_to_peer(app, peer_addr)
+        .connect_to_peer(app, peer_addr, peer_id)
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn kick_peer(state: State<'_, AppState>, peer_id: String) -> Result<(), String> {
+    state
+        .manager
+        .kick_peer(peer_id)
         .await
         .map_err(|error| format!("{error:#}"))
 }
@@ -75,6 +85,7 @@ fn main() {
             start_hosting,
             stop_hosting,
             connect_to_peer,
+            kick_peer,
             get_status
         ])
         .run(tauri::generate_context!())

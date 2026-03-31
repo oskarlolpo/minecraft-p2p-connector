@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Blood Paradise Hub",
+  "productName": "Minecraft P2P Connector",
   "version": "0.2.0",
-  "identifier": "com.bloodparadise.hub",
+  "identifier": "com.minecraft.p2pconnector",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -15,13 +15,13 @@
     "windows": [
       {
         "label": "main",
-        "title": "Blood Paradise Hub",
-        "width": 520,
-        "height": 700,
-        "minWidth": 520,
-        "minHeight": 700,
-        "maxWidth": 520,
-        "maxHeight": 700,
+        "title": "Minecraft P2P Connector",
+        "width": 1200,
+        "height": 730,
+        "minWidth": 1200,
+        "minHeight": 730,
+        "maxWidth": 1200,
+        "maxHeight": 730,
         "resizable": false,
         "fullscreen": false,
         "center": true
