@@ -1,13 +1,17 @@
 import * as Ably from "ably";
+import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 
 const ABLY_API_KEY = "aGkPAA.1VHkjw:Bai-67g05FcqHdfVOMiSfjYlK3aLz8wOzj5WeTgz4cw";
 const LOBBY_CHANNEL_NAME = "minecraft-lobby";
 const DEFAULT_SLOTS = "1/30";
 const POLL_INTERVAL_MS = 1500;
+const SAFE_RELEASE_STATES = new Set(["initialized", "detached", "failed"]);
+const SAFE_SKIP_STATES = new Set(["detached", "failed", "suspended"]);
 
 const roomNameEl = document.querySelector("#room-name");
 const roomPasswordEl = document.querySelector("#room-password");
+const localGamePortEl = document.querySelector("#local-game-port");
 const hostButtonEl = document.querySelector("#host-button");
 const stopButtonEl = document.querySelector("#stop-button");
 const refreshLobbyEl = document.querySelector("#refresh-lobby");
@@ -25,12 +29,14 @@ const selectedServerEl = document.querySelector("#selected-server");
 const selectedEndpointEl = document.querySelector("#selected-endpoint");
 const statusNoteEl = document.querySelector("#status-note");
 const peerCountEl = document.querySelector("#peer-count");
+const minecraftTargetHintEl = document.querySelector("#minecraft-target-hint");
 
 const hostSession = {
   active: false,
   roomName: "",
   hasPassword: false,
   peerAddr: null,
+  localPort: 25565,
   presencePayload: null,
 };
 
@@ -44,7 +50,8 @@ const state = {
   privateChannel: null,
   logBuffer: [],
   syncingPresence: false,
-  channelHandlersBound: false,
+  pendingConnects: new Set(),
+  tunnelReady: false,
 };
 
 function ensureClientId() {
@@ -84,19 +91,12 @@ function renderLogs() {
     : `<div class="log-entry text-white/35">Лог пока пуст.</div>`;
 }
 
-function syncButtons() {
-  const mode = state.status?.mode ?? "idle";
-  const busy = ["starting", "connecting", "punching", "waitingForPeer"].includes(
-    state.status?.state ?? "idle",
-  );
-  const isHostMode = mode === "host";
-  const selectedServer = getSelectedServer();
-
-  hostButtonEl.disabled = isHostMode || busy;
-  stopButtonEl.disabled = mode === "idle";
-  connectSelectedEl.disabled =
-    !selectedServer || selectedServer.clientId === localClientId || busy || mode === "host";
-  copySelectedEndpointEl.disabled = !selectedServer?.peerAddr;
+function setMinecraftHint(text, active = false) {
+  minecraftTargetHintEl.textContent = text;
+  minecraftTargetHintEl.classList.toggle("opacity-0", !active);
+  minecraftTargetHintEl.classList.toggle("opacity-100", active);
+  minecraftTargetHintEl.classList.toggle("border-emerald-500/15", active);
+  minecraftTargetHintEl.classList.toggle("bg-emerald-500/5", active);
 }
 
 function getSelectedServer() {
@@ -108,6 +108,27 @@ function renderSelectedServer() {
   selectedServerEl.textContent = selected ? selected.roomName : "No selection";
   selectedEndpointEl.textContent = selected?.peerAddr ?? "n/a";
   syncButtons();
+}
+
+function syncButtons() {
+  const mode = state.status?.mode ?? "idle";
+  const busy = ["starting", "connecting", "punching", "waitingForPeer"].includes(
+    state.status?.state ?? "idle",
+  );
+  const isHostMode = mode === "host";
+  const selected = getSelectedServer();
+
+  hostButtonEl.disabled = isHostMode || busy;
+  stopButtonEl.disabled = mode === "idle";
+  connectSelectedEl.disabled =
+    !selected ||
+    selected.clientId === localClientId ||
+    busy ||
+    isHostMode ||
+    state.pendingConnects.has(selected.clientId);
+  connectSelectedEl.textContent =
+    selected && state.pendingConnects.has(selected.clientId) ? "Connecting..." : "Connect Selected";
+  copySelectedEndpointEl.disabled = !selected?.peerAddr;
 }
 
 function renderServers() {
@@ -123,6 +144,7 @@ function renderServers() {
     .map((server) => {
       const isSelected = state.selectedServerId === server.clientId;
       const isLocal = server.clientId === localClientId;
+      const isConnecting = state.pendingConnects.has(server.clientId);
       return `
         <article class="server-card ${isSelected ? "server-card-active" : ""}">
           <div class="flex items-start justify-between gap-3">
@@ -132,6 +154,7 @@ function renderServers() {
                 Host: ${escapeHtml(server.hostName)}${isLocal ? " (you)" : ""}
               </p>
               <p class="mt-1 break-all text-[11px] text-white/35">${escapeHtml(server.peerAddr ?? "n/a")}</p>
+              <p class="mt-1 text-[11px] text-white/35">LAN port: ${escapeHtml(server.localPort ?? 25565)}</p>
             </div>
             <div class="text-right">
               <p class="text-xs uppercase tracking-[0.18em] text-white/45">${escapeHtml(server.slots)}</p>
@@ -143,9 +166,9 @@ function renderServers() {
             <button
               class="${isLocal ? "ghost-button" : "primary-button"} flex-1"
               data-connect-server="${escapeHtml(server.clientId)}"
-              ${isLocal ? "disabled" : ""}
+              ${isLocal || isConnecting ? "disabled" : ""}
             >
-              ${isLocal ? "Hosting" : "Connect"}
+              ${isLocal ? "Hosting" : isConnecting ? "Connecting..." : "Connect"}
             </button>
           </div>
         </article>
@@ -220,6 +243,7 @@ function hydrateServers(members) {
         slots: data.slots ?? DEFAULT_SLOTS,
         hasPassword: Boolean(data.has_password),
         peerAddr: data.peer_addr ?? null,
+        localPort: data.local_port ?? 25565,
       };
     })
     .filter((server) => Boolean(server.peerAddr));
@@ -235,63 +259,113 @@ function hydrateServers(members) {
   renderServers();
 }
 
-async function recreateChannels() {
+function buildPresencePayload(status) {
+  return {
+    room_name: hostSession.roomName,
+    host_name: localClientId,
+    slots: `${Math.max(1, (status?.peerCount ?? 0) + 1)}/30`,
+    has_password: hostSession.hasPassword,
+    peer_addr: hostSession.peerAddr,
+    local_port: hostSession.localPort,
+  };
+}
+
+function safeShouldSkip(channel) {
+  return !channel || SAFE_SKIP_STATES.has(channel.state);
+}
+
+async function safePresenceLeave(channel) {
+  if (!channel || channel.state !== "attached") {
+    return;
+  }
+  try {
+    await channel.presence.leave();
+    addLog("Presence left.");
+  } catch (error) {
+    addLog(`Presence leave skipped: ${String(error)}`);
+  }
+}
+
+async function safeDetachChannel(channel) {
+  if (!channel || SAFE_SKIP_STATES.has(channel.state) || channel.state === "initialized") {
+    return;
+  }
+  try {
+    if (channel.state !== "detached") {
+      await channel.detach();
+    }
+  } catch (error) {
+    addLog(`Channel detach skipped: ${String(error)}`);
+  }
+}
+
+function safeReleaseChannel(name) {
+  const channel = state.realtime?.channels.get(name);
+  if (!channel || !SAFE_RELEASE_STATES.has(channel.state)) {
+    return;
+  }
+  try {
+    state.realtime.channels.release(name);
+  } catch (error) {
+    addLog(`Channel release skipped: ${String(error)}`);
+  }
+}
+
+async function ensureChannels() {
   if (!state.realtime) {
     return;
   }
 
-  state.channelHandlersBound = false;
-  state.realtime.channels.release(LOBBY_CHANNEL_NAME);
-  state.realtime.channels.release(`lobby:${localClientId}`);
-  state.lobbyChannel = state.realtime.channels.get(LOBBY_CHANNEL_NAME);
-  state.privateChannel = state.realtime.channels.get(`lobby:${localClientId}`);
-  await bindChannelHandlers();
+  state.lobbyChannel ??= state.realtime.channels.get(LOBBY_CHANNEL_NAME);
+  state.privateChannel ??= state.realtime.channels.get(`lobby:${localClientId}`);
 }
 
 async function bindChannelHandlers() {
-  if (!state.lobbyChannel || !state.privateChannel || state.channelHandlersBound) {
+  await ensureChannels();
+  if (!state.lobbyChannel || !state.privateChannel) {
     return;
   }
 
-  await state.lobbyChannel.presence.subscribe("enter", () => void refreshLobby(false));
-  await state.lobbyChannel.presence.subscribe("update", () => void refreshLobby(false));
-  await state.lobbyChannel.presence.subscribe("leave", () => void refreshLobby(false));
+  if (!state.lobbyChannel.__bpPresenceBound) {
+    await state.lobbyChannel.presence.subscribe("enter", () => void refreshLobby());
+    await state.lobbyChannel.presence.subscribe("update", () => void refreshLobby());
+    await state.lobbyChannel.presence.subscribe("leave", () => void refreshLobby());
+    state.lobbyChannel.__bpPresenceBound = true;
+  }
 
-  await state.privateChannel.subscribe("connect-request", async (message) => {
-    const peerAddr = message.data?.peer_addr;
-    const requester = message.data?.client_id ?? "unknown";
-    addLog(`Incoming handshake from ${requester}: ${peerAddr ?? "n/a"}`);
-    if (!peerAddr) {
-      return;
-    }
+  if (!state.privateChannel.__bpMessageBound) {
+    await state.privateChannel.subscribe("connect-request", async (message) => {
+      const peerAddr = message.data?.peer_addr;
+      const requester = message.data?.client_id ?? "unknown";
+      addLog(`Incoming handshake from ${requester}: ${peerAddr ?? "n/a"}`);
+      if (!peerAddr) {
+        return;
+      }
 
-    try {
-      await invoke("connect_to_peer", { peerAddr });
-      addLog(`Host sent punch packets to ${peerAddr}.`);
-    } catch (error) {
-      addLog(`Punch error: ${String(error)}`);
-    }
-  });
-
-  state.channelHandlersBound = true;
+      try {
+        await invoke("connect_to_peer", { peerAddr });
+        addLog(`Host sent punch packets to ${peerAddr}.`);
+      } catch (error) {
+        addLog(`Punch error: ${String(error)}`);
+      }
+    });
+    state.privateChannel.__bpMessageBound = true;
+  }
 }
 
-async function refreshLobby(forceRecover = false) {
+async function refreshLobby() {
+  await ensureChannels();
   if (!state.lobbyChannel || !state.realtime) {
     return;
   }
 
   try {
-    if (forceRecover || ["suspended", "detached", "failed"].includes(state.lobbyChannel.state)) {
-      await recreateChannels();
-    }
-
     if (state.realtime.connection.state !== "connected") {
       addLog("Lobby refresh postponed: Ably not connected.");
       return;
     }
 
-    if (state.lobbyChannel.state !== "attached") {
+    if (!safeShouldSkip(state.lobbyChannel) && state.lobbyChannel.state !== "attached") {
       await state.lobbyChannel.attach();
     }
 
@@ -303,22 +377,15 @@ async function refreshLobby(forceRecover = false) {
   }
 }
 
-function buildPresencePayload(status) {
-  return {
-    room_name: hostSession.roomName,
-    host_name: localClientId,
-    slots: `${Math.max(1, (status?.peerCount ?? 0) + 1)}/30`,
-    has_password: hostSession.hasPassword,
-    peer_addr: hostSession.peerAddr,
-  };
-}
-
 async function syncPresence(status, { force = false, enter = false } = {}) {
-  if (!hostSession.active || !state.lobbyChannel || !hostSession.peerAddr || state.syncingPresence) {
-    return;
-  }
-
-  if (state.realtime?.connection.state !== "connected") {
+  await ensureChannels();
+  if (
+    !hostSession.active ||
+    !state.lobbyChannel ||
+    !hostSession.peerAddr ||
+    state.syncingPresence ||
+    state.realtime?.connection.state !== "connected"
+  ) {
     return;
   }
 
@@ -330,11 +397,7 @@ async function syncPresence(status, { force = false, enter = false } = {}) {
 
   state.syncingPresence = true;
   try {
-    if (["suspended", "detached", "failed"].includes(state.lobbyChannel.state)) {
-      await recreateChannels();
-    }
-
-    if (state.lobbyChannel.state !== "attached") {
+    if (!safeShouldSkip(state.lobbyChannel) && state.lobbyChannel.state !== "attached") {
       await state.lobbyChannel.attach();
     }
 
@@ -354,26 +417,25 @@ async function syncPresence(status, { force = false, enter = false } = {}) {
 }
 
 async function setupAbly() {
-  const realtime = new Ably.Realtime({
+  state.realtime = new Ably.Realtime({
     key: ABLY_API_KEY,
     clientId: localClientId,
   });
-  state.realtime = realtime;
 
-  realtime.connection.on(async (change) => {
+  state.realtime.connection.on(async (change) => {
     ablyStateEl.textContent = change.current;
     addLog(`Ably connection: ${change.previous ?? "none"} -> ${change.current}`);
 
     if (change.current === "connected") {
-      await recreateChannels();
+      await bindChannelHandlers();
       await syncPresence(state.status, { force: true, enter: !hostSession.presencePayload });
-      await refreshLobby(false);
+      await refreshLobby();
     }
   });
 
-  await new Promise((resolve) => realtime.connection.once("connected", resolve));
-  await recreateChannels();
-  await refreshLobby(false);
+  await new Promise((resolve) => state.realtime.connection.once("connected", resolve));
+  await bindChannelHandlers();
+  await refreshLobby();
 }
 
 async function startHosting() {
@@ -383,11 +445,14 @@ async function startHosting() {
     return;
   }
 
+  const localPort = Number(localGamePortEl.value || 25565);
   const password = roomPasswordEl.value.trim() || null;
   hostButtonEl.disabled = true;
+  state.tunnelReady = false;
+  setMinecraftHint("Ожидание туннеля...", false);
 
   try {
-    await invoke("start_hosting", { roomName, password });
+    await invoke("start_hosting", { roomName, password, localPort });
     const status = await waitForStatus((snapshot) => Boolean(snapshot.publicUdpAddr));
     renderStatus(status);
 
@@ -395,10 +460,11 @@ async function startHosting() {
     hostSession.roomName = roomName;
     hostSession.hasPassword = Boolean(password);
     hostSession.peerAddr = status.publicUdpAddr ?? status.udpBindAddr;
+    hostSession.localPort = localPort;
     hostSession.presencePayload = null;
 
     await syncPresence(status, { force: true, enter: true });
-    await refreshLobby(true);
+    await refreshLobby();
   } catch (error) {
     addLog(`Host start failed: ${String(error)}`);
   } finally {
@@ -409,20 +475,12 @@ async function startHosting() {
 async function stopHosting() {
   stopButtonEl.disabled = true;
   hostButtonEl.disabled = true;
+  state.pendingConnects.clear();
+  state.tunnelReady = false;
+  setMinecraftHint("Ожидание туннеля...", false);
 
   try {
-    if (hostSession.active && state.lobbyChannel && state.realtime?.connection.state === "connected") {
-      try {
-        if (state.lobbyChannel.state !== "attached") {
-          await state.lobbyChannel.attach();
-        }
-        await state.lobbyChannel.presence.leave();
-        addLog("Presence left.");
-      } catch (presenceError) {
-        addLog(`Presence leave skipped: ${String(presenceError)}`);
-      }
-    }
-
+    await safePresenceLeave(state.lobbyChannel);
     await invoke("stop_hosting");
   } catch (error) {
     addLog(`Stop failed: ${String(error)}`);
@@ -431,6 +489,7 @@ async function stopHosting() {
     hostSession.roomName = "";
     hostSession.hasPassword = false;
     hostSession.peerAddr = null;
+    hostSession.localPort = 25565;
     hostSession.presencePayload = null;
     state.selectedServerId = null;
 
@@ -453,24 +512,34 @@ async function stopHosting() {
       });
     }
 
-    await refreshLobby(true);
+    await refreshLobby();
     addLog("Host session stopped.");
     syncButtons();
   }
 }
 
 async function connectToServer(server) {
-  state.selectedServerId = server.clientId;
-  renderSelectedServer();
-
   if (server.clientId === localClientId) {
     addLog("Собственный host выбран. Для подключения нужен второй клиент.");
     return;
   }
 
+  if (state.pendingConnects.has(server.clientId)) {
+    addLog(`Повторный connect к ${server.roomName} заблокирован.`);
+    return;
+  }
+
+  state.selectedServerId = server.clientId;
+  state.pendingConnects.add(server.clientId);
+  state.tunnelReady = false;
+  setMinecraftHint("Connecting...", false);
+  renderServers();
+
   if (server.hasPassword) {
     const provided = window.prompt(`Введите пароль для "${server.roomName}"`);
     if (provided == null) {
+      state.pendingConnects.delete(server.clientId);
+      renderServers();
       return;
     }
   }
@@ -490,7 +559,10 @@ async function connectToServer(server) {
 
     addLog(`Handshake request sent to host ${server.clientId}.`);
   } catch (error) {
+    state.pendingConnects.delete(server.clientId);
+    setMinecraftHint("Failed to punch through NAT.", false);
     addLog(`Connect failed: ${String(error)}`);
+    renderServers();
   }
 }
 
@@ -526,9 +598,33 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+await listen("tunnel_established", async (event) => {
+  state.pendingConnects.clear();
+  state.tunnelReady = true;
+  setMinecraftHint("Подключайтесь в Minecraft к localhost:25565", true);
+  addLog(`Tunnel established: ${event.payload?.minecraftAddr ?? "localhost:25565"}`);
+  renderServers();
+});
+
+await listen("tunnel_failed", async (event) => {
+  state.pendingConnects.clear();
+  state.tunnelReady = false;
+  setMinecraftHint("Failed to punch through NAT.", false);
+  addLog(event.payload?.reason ?? "Failed to punch through NAT.");
+  renderServers();
+});
+
 hostButtonEl.addEventListener("click", startHosting);
 stopButtonEl.addEventListener("click", stopHosting);
-refreshLobbyEl.addEventListener("click", () => void refreshLobby(true));
+refreshLobbyEl.addEventListener("click", async () => {
+  await safeDetachChannel(state.lobbyChannel);
+  safeReleaseChannel(LOBBY_CHANNEL_NAME);
+  safeReleaseChannel(`lobby:${localClientId}`);
+  state.lobbyChannel = null;
+  state.privateChannel = null;
+  await bindChannelHandlers();
+  await refreshLobby();
+});
 copyLogsEl.addEventListener("click", async () => {
   const text = currentLogLines().join("\n");
   await navigator.clipboard.writeText(text);

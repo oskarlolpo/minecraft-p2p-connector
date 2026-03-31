@@ -2,6 +2,8 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use quinn::{Connection, Endpoint, EndpointConfig};
+use serde::Serialize;
+use tauri::{AppHandle, Emitter};
 use tokio::{
     net::{TcpListener, TcpStream, UdpSocket},
     sync::{Mutex, RwLock},
@@ -48,6 +50,21 @@ struct HostControl {
     punch_socket: Arc<UdpSocket>,
     room_name: String,
     peer_id: String,
+    local_game_port: u16,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TunnelEstablishedEvent {
+    peer_addr: String,
+    minecraft_addr: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TunnelFailedEvent {
+    peer_addr: String,
+    reason: String,
 }
 
 impl NetworkManager {
@@ -75,18 +92,26 @@ impl NetworkManager {
 
     pub async fn start_hosting(
         &self,
+        _app: AppHandle,
         room_name: String,
         password: Option<String>,
+        local_port: u16,
     ) -> Result<String> {
         let room_name = room_name.trim().to_string();
         if room_name.is_empty() {
             return Err(anyhow!("room name must not be empty"));
         }
+        if local_port == 0 {
+            return Err(anyhow!("local game port must be greater than 0"));
+        }
 
         let _guard = self.inner.control.lock().await;
         self.reset_session().await;
 
-        match self.start_hosting_inner(room_name, password).await {
+        match self
+            .start_hosting_inner(room_name, password, local_port)
+            .await
+        {
             Ok(peer_addr) => Ok(peer_addr),
             Err(error) => {
                 self.mark_fatal(SessionMode::Host, None, &error).await;
@@ -102,7 +127,7 @@ impl NetworkManager {
         Ok(())
     }
 
-    pub async fn connect_to_peer(&self, peer_addr: String) -> Result<()> {
+    pub async fn connect_to_peer(&self, app: AppHandle, peer_addr: String) -> Result<()> {
         let peer_addr = peer_addr.trim().to_string();
         if peer_addr.is_empty() {
             return Err(anyhow!("peer address must not be empty"));
@@ -119,13 +144,14 @@ impl NetworkManager {
         }
 
         self.reset_session().await;
-        self.start_client_connect(peer_addr).await
+        self.start_client_connect(app, peer_addr).await
     }
 
     async fn start_hosting_inner(
         &self,
         room_name: String,
         password: Option<String>,
+        local_port: u16,
     ) -> Result<String> {
         let peer_id = Uuid::new_v4().to_string();
         let peer_map = Arc::new(RwLock::new(HashMap::<SocketAddr, String>::new()));
@@ -160,7 +186,7 @@ impl NetworkManager {
             public_udp_addr: Some(public_udp_addr.to_string()),
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             note: Some(format!(
-                "Host активен. Комната: {room_name}. {}",
+                "Host активен. Комната: {room_name}. LAN порт: {local_port}. {}",
                 if password.is_some() {
                     "Лобби защищено паролем."
                 } else {
@@ -170,13 +196,15 @@ impl NetworkManager {
             logs: vec![
                 format!("Публичный UDP адрес: {public_udp_addr}"),
                 format!("Локальный bind: {udp_bind_addr}"),
+                format!("Host forwards to {}", proxy::minecraft_local_addr(local_port)),
             ],
             ..Default::default()
         })
         .await;
 
         let cancel = CancellationToken::new();
-        let accept_task = self.spawn_host_accept_loop(endpoint, peer_map, cancel.clone());
+        let accept_task =
+            self.spawn_host_accept_loop(endpoint, peer_map, local_port, cancel.clone());
 
         *self.inner.session.lock().await = Some(SessionRuntime {
             cancel,
@@ -185,6 +213,7 @@ impl NetworkManager {
                 punch_socket,
                 room_name,
                 peer_id,
+                local_game_port: local_port,
             }),
         });
 
@@ -205,11 +234,14 @@ impl NetworkManager {
         let cancel = runtime.cancel.clone();
         let room_name = host.room_name.clone();
         let peer_id = host.peer_id.clone();
+        let local_game_port = host.local_game_port;
         drop(session);
 
         self.mutate_status(|status| {
             status.state = ConnectionState::Punching;
-            status.note = Some(format!("Пробиваю UDP до клиента {peer_addr}."));
+            status.note = Some(format!(
+                "Пробиваю UDP до клиента {peer_addr}. Игра слушается на 127.0.0.1:{local_game_port}."
+            ));
         })
         .await;
         self.upsert_peer(peer_addr.to_string(), peer_addr, false, None)
@@ -223,9 +255,9 @@ impl NetworkManager {
         Ok(true)
     }
 
-    async fn start_client_connect(&self, peer_addr: SocketAddr) -> Result<()> {
+    async fn start_client_connect(&self, app: AppHandle, peer_addr: SocketAddr) -> Result<()> {
         let cancel = CancellationToken::new();
-        let task = self.spawn_client_connect_flow(peer_addr, cancel.clone());
+        let task = self.spawn_client_connect_flow(app, peer_addr, cancel.clone());
 
         *self.inner.session.lock().await = Some(SessionRuntime {
             cancel,
@@ -238,16 +270,24 @@ impl NetworkManager {
 
     fn spawn_client_connect_flow(
         &self,
+        app: AppHandle,
         peer_addr: SocketAddr,
         cancel: CancellationToken,
     ) -> JoinHandle<()> {
         let manager = self.clone();
         tokio::spawn(async move {
             if let Err(error) = manager
-                .run_client_connect_flow(peer_addr, cancel.clone())
+                .run_client_connect_flow(app.clone(), peer_addr, cancel.clone())
                 .await
             {
                 if !cancel.is_cancelled() {
+                    let _ = app.emit(
+                        "tunnel_failed",
+                        TunnelFailedEvent {
+                            peer_addr: peer_addr.to_string(),
+                            reason: "Failed to punch through NAT.".into(),
+                        },
+                    );
                     manager.mark_fatal(SessionMode::Client, None, &error).await;
                 }
             }
@@ -256,6 +296,7 @@ impl NetworkManager {
 
     async fn run_client_connect_flow(
         &self,
+        app: AppHandle,
         peer_addr: SocketAddr,
         cancel: CancellationToken,
     ) -> Result<()> {
@@ -330,7 +371,8 @@ impl NetworkManager {
 
         self.mutate_status(|status| {
             status.state = ConnectionState::Connected;
-            status.note = Some("Соединение установлено. Подключайтесь в Minecraft к localhost.".into());
+            status.note =
+                Some("Соединение установлено. Подключайтесь в Minecraft к localhost:25565.".into());
             status.peers = vec![PeerInfo {
                 peer_id: peer_id.clone(),
                 addr: peer_addr.to_string(),
@@ -340,8 +382,16 @@ impl NetworkManager {
         })
         .await;
         self.push_log("Proxy на 127.0.0.1:25565 поднят.".into()).await;
+        let _ = app.emit(
+            "tunnel_established",
+            TunnelEstablishedEvent {
+                peer_addr: peer_addr.to_string(),
+                minecraft_addr: proxy::MINECRAFT_LOCAL_ADDR.into(),
+            },
+        );
 
-        let proxy_task = self.spawn_client_proxy_loop(local_listener, connection.clone(), cancel.clone());
+        let proxy_task =
+            self.spawn_client_proxy_loop(local_listener, connection.clone(), cancel.clone());
         let ping_task = self.spawn_ping_loop(connection.clone(), peer_id.clone(), cancel.clone());
         let close_task = self.spawn_client_close_loop(connection, peer_id, cancel.clone());
 
@@ -359,6 +409,7 @@ impl NetworkManager {
         &self,
         endpoint: Endpoint,
         peer_map: Arc<RwLock<HashMap<SocketAddr, String>>>,
+        local_game_port: u16,
         cancel: CancellationToken,
     ) -> JoinHandle<()> {
         let manager = self.clone();
@@ -399,7 +450,12 @@ impl NetworkManager {
                         let connection_manager = manager.clone();
                         tokio::spawn(async move {
                             connection_manager
-                                .handle_host_connection(connection, peer_id, connection_cancel)
+                                .handle_host_connection(
+                                    connection,
+                                    peer_id,
+                                    local_game_port,
+                                    connection_cancel,
+                                )
                                 .await;
                         });
                     }
@@ -434,7 +490,8 @@ impl NetworkManager {
                         let conn = connection.clone();
                         tokio::spawn(async move {
                             if let Err(error) =
-                                NetworkManager::handle_client_proxy_connection(conn, tcp_stream).await
+                                NetworkManager::handle_client_proxy_connection(conn, tcp_stream)
+                                    .await
                             {
                                 tracing::warn!("client proxy stream failed: {error:#}");
                             }
@@ -504,6 +561,7 @@ impl NetworkManager {
         &self,
         connection: Connection,
         peer_id: String,
+        local_game_port: u16,
         cancel: CancellationToken,
     ) {
         let ping_task = self.spawn_ping_loop(connection.clone(), peer_id.clone(), cancel.clone());
@@ -517,7 +575,8 @@ impl NetworkManager {
             match stream {
                 Ok((send, recv)) => {
                     tokio::spawn(async move {
-                        if let Err(error) = proxy::bridge_quic_to_local_minecraft(send, recv).await
+                        if let Err(error) =
+                            proxy::bridge_quic_to_local_minecraft(send, recv, local_game_port).await
                         {
                             tracing::warn!("host stream proxy failed: {error:#}");
                         }
@@ -526,7 +585,8 @@ impl NetworkManager {
                 Err(quinn::ConnectionError::ApplicationClosed { .. }) => break,
                 Err(error) => {
                     if !cancel.is_cancelled() {
-                        self.set_nonfatal(format!("peer stream failed: {error:#}")).await;
+                        self.set_nonfatal(format!("peer stream failed: {error:#}"))
+                            .await;
                     }
                     break;
                 }
@@ -541,10 +601,30 @@ impl NetworkManager {
         connection: Connection,
         tcp_stream: TcpStream,
     ) -> Result<()> {
-        let (send, recv) = connection
-            .open_bi()
-            .await
-            .context("failed to open QUIC stream to host")?;
+        let mut last_error = None;
+        let mut opened_stream = None;
+
+        for attempt in 1..=3 {
+            match timeout(Duration::from_secs(2), connection.open_bi()).await {
+                Ok(Ok(stream)) => {
+                    opened_stream = Some(stream);
+                    break;
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!("open_bi attempt {attempt}/3 failed: {error:#}");
+                    last_error = Some(anyhow!(error));
+                }
+                Err(_) => {
+                    tracing::warn!("open_bi attempt {attempt}/3 timed out");
+                    last_error = Some(anyhow!("open_bi timed out"));
+                }
+            }
+        }
+
+        let (send, recv) = opened_stream.ok_or_else(|| {
+            last_error.unwrap_or_else(|| anyhow!("failed to open QUIC stream to host"))
+        })?;
+
         proxy::bridge_client_tcp_to_quic(tcp_stream, send, recv).await
     }
 
@@ -556,14 +636,14 @@ impl NetworkManager {
     ) -> Result<Connection> {
         let mut last_error = None;
 
-        for attempt in 1..=8 {
+        for attempt in 1..=4 {
             if cancel.is_cancelled() {
                 return Err(anyhow!("connection attempt cancelled"));
             }
 
             self.mutate_status(|status| {
                 status.state = ConnectionState::Connecting;
-                status.note = Some(format!("QUIC handshake, попытка {attempt}/8."));
+                status.note = Some(format!("QUIC handshake, попытка {attempt}/4."));
             })
             .await;
 
@@ -571,13 +651,13 @@ impl NetworkManager {
                 .connect(peer_addr, "localhost")
                 .context("failed to start QUIC connect")?;
 
-            match timeout(Duration::from_secs(3), connect).await {
+            match timeout(Duration::from_millis(1250), connect).await {
                 Ok(Ok(connection)) => return Ok(connection),
                 Ok(Err(error)) => last_error = Some(anyhow!(error)),
                 Err(_) => last_error = Some(anyhow!("QUIC handshake timed out")),
             }
 
-            tokio::time::sleep(Duration::from_millis(350)).await;
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
 
         Err(last_error.unwrap_or_else(|| anyhow!("unable to establish QUIC session")))
@@ -625,8 +705,8 @@ impl NetworkManager {
     async fn push_log(&self, entry: String) {
         self.mutate_status(|status| {
             status.logs.insert(0, entry);
-            if status.logs.len() > 48 {
-                status.logs.truncate(48);
+            if status.logs.len() > 64 {
+                status.logs.truncate(64);
             }
         })
         .await;

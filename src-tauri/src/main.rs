@@ -10,7 +10,7 @@ mod signaling;
 
 use models::NetworkStatus;
 use network::manager::NetworkManager;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 #[derive(Clone)]
 struct AppState {
@@ -19,13 +19,15 @@ struct AppState {
 
 #[tauri::command]
 async fn start_hosting(
+    app: AppHandle,
     state: State<'_, AppState>,
     room_name: String,
     password: Option<String>,
+    local_port: u16,
 ) -> Result<String, String> {
     state
         .manager
-        .start_hosting(room_name, password)
+        .start_hosting(app, room_name, password, local_port)
         .await
         .map_err(|error| format!("{error:#}"))
 }
@@ -40,10 +42,14 @@ async fn stop_hosting(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn connect_to_peer(state: State<'_, AppState>, peer_addr: String) -> Result<(), String> {
+async fn connect_to_peer(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    peer_addr: String,
+) -> Result<(), String> {
     state
         .manager
-        .connect_to_peer(peer_addr)
+        .connect_to_peer(app, peer_addr)
         .await
         .map_err(|error| format!("{error:#}"))
 }
