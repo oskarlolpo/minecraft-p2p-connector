@@ -9,6 +9,10 @@ use tokio_util::sync::CancellationToken;
 
 const DEFAULT_STUN_SERVERS: &str =
     "stun.cloudflare.com:3478,stun.l.google.com:19302,stun1.l.google.com:19302";
+const PUNCH_FAST_BURST_PACKETS: usize = 24;
+const PUNCH_FAST_BURST_DELAY_MS: u64 = 40;
+const PUNCH_SUSTAIN_PACKETS: usize = 80;
+const PUNCH_SUSTAIN_DELAY_MS: u64 = 110;
 
 #[derive(Debug, Clone)]
 pub struct SignalingConfig {
@@ -150,12 +154,21 @@ pub async fn punch_remote(
     cancel: CancellationToken,
 ) -> Result<()> {
     let payload = format!("MCP2P-PUNCH|{room_code}|{peer_id}");
-    for _ in 0..32 {
+
+    for _ in 0..PUNCH_FAST_BURST_PACKETS {
         if cancel.is_cancelled() {
             break;
         }
         socket.send_to(payload.as_bytes(), remote).await?;
-        tokio::time::sleep(Duration::from_millis(75)).await;
+        tokio::time::sleep(Duration::from_millis(PUNCH_FAST_BURST_DELAY_MS)).await;
+    }
+
+    for _ in 0..PUNCH_SUSTAIN_PACKETS {
+        if cancel.is_cancelled() {
+            break;
+        }
+        socket.send_to(payload.as_bytes(), remote).await?;
+        tokio::time::sleep(Duration::from_millis(PUNCH_SUSTAIN_DELAY_MS)).await;
     }
 
     Ok(())

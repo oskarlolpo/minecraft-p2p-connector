@@ -22,6 +22,10 @@ use crate::{
 use super::{minecraft, proxy};
 
 const ABLY_SIGNAL_LABEL: &str = "Ably Presence + Channels";
+const CLIENT_CONNECT_RETRY_ATTEMPTS: usize = 10;
+const CLIENT_CONNECT_TIMEOUT_MS: u64 = 1500;
+const CLIENT_CONNECT_DELAY_MS: u64 = 300;
+const HOST_PUNCH_GRACE_MS: u64 = 900;
 
 #[derive(Clone)]
 pub struct NetworkManager {
@@ -430,6 +434,11 @@ impl NetworkManager {
             }
         });
 
+        tokio::select! {
+            _ = cancel.cancelled() => return Err(anyhow!("подключение отменено")),
+            _ = tokio::time::sleep(Duration::from_millis(HOST_PUNCH_GRACE_MS)) => {}
+        }
+
         let connection = self
             .connect_with_retries(&endpoint, peer_addr, cancel.clone())
             .await?;
@@ -727,14 +736,16 @@ impl NetworkManager {
     ) -> Result<Connection> {
         let mut last_error = None;
 
-        for attempt in 1..=4 {
+        for attempt in 1..=CLIENT_CONNECT_RETRY_ATTEMPTS {
             if cancel.is_cancelled() {
                 return Err(anyhow!("подключение отменено"));
             }
 
             self.mutate_status(|status| {
                 status.state = ConnectionState::Connecting;
-                status.note = Some(format!("QUIC handshake, попытка {attempt}/4."));
+                status.note = Some(format!(
+                    "QUIC handshake, попытка {attempt}/{CLIENT_CONNECT_RETRY_ATTEMPTS}. Жду ответный NAT punch."
+                ));
             })
             .await;
 
@@ -742,13 +753,13 @@ impl NetworkManager {
                 .connect(peer_addr, "localhost")
                 .context("не удалось запустить QUIC connect")?;
 
-            match timeout(Duration::from_millis(1250), connect).await {
+            match timeout(Duration::from_millis(CLIENT_CONNECT_TIMEOUT_MS), connect).await {
                 Ok(Ok(connection)) => return Ok(connection),
                 Ok(Err(error)) => last_error = Some(anyhow!(error)),
                 Err(_) => last_error = Some(anyhow!("QUIC handshake timed out")),
             }
 
-            tokio::time::sleep(Duration::from_millis(250)).await;
+            tokio::time::sleep(Duration::from_millis(CLIENT_CONNECT_DELAY_MS)).await;
         }
 
         Err(last_error.unwrap_or_else(|| anyhow!("не удалось установить QUIC session")))
