@@ -2,33 +2,27 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use futures_util::{
-    stream::{SplitSink, SplitStream},
-    SinkExt, StreamExt,
-};
 use quinn::{Connection, Endpoint, EndpointConfig};
+use rumqttc::AsyncClient;
 use tokio::{
     net::{TcpListener, TcpStream, UdpSocket},
     sync::{Mutex, RwLock},
     task::JoinHandle,
     time::timeout,
 };
-use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
     cert::{build_client_config, build_server_config},
-    local_signaling::run_local_signaling,
     models::{ConnectionState, NetworkStatus, PeerInfo, SessionMode},
-    signaling::{punch_remote, register_udp_mapping, ClientSignal, ServerSignal, SignalingConfig},
+    signaling::{
+        discover_public_addr, new_room_code, publish_broker_message, punch_remote, room_join_topic,
+        room_offer_topic, subscribe_topic, BrokerConnection, BrokerMessage, SignalingConfig,
+    },
 };
 
 use super::proxy;
-
-type SignalSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
-type SignalReader = SplitStream<SignalSocket>;
-type SignalWriter = SplitSink<SignalSocket, Message>;
 
 #[derive(Clone)]
 pub struct NetworkManager {
@@ -40,7 +34,6 @@ struct Inner {
     session: Mutex<Option<SessionRuntime>>,
     status: RwLock<NetworkStatus>,
     signaling: SignalingConfig,
-    embedded_signaling_started: Mutex<bool>,
 }
 
 struct SessionRuntime {
@@ -52,7 +45,7 @@ impl NetworkManager {
     pub fn new() -> Self {
         let signaling = SignalingConfig::from_env();
         let mut status = NetworkStatus {
-            signaling_server: signaling.ws_url.clone(),
+            signaling_server: signaling.broker_label(),
             ..Default::default()
         };
         status.logs.push("Приложение запущено.".into());
@@ -63,7 +56,6 @@ impl NetworkManager {
                 session: Mutex::new(None),
                 status: RwLock::new(status),
                 signaling,
-                embedded_signaling_started: Mutex::new(false),
             }),
         }
     }
@@ -106,47 +98,42 @@ impl NetworkManager {
 
     async fn start_hosting_inner(&self) -> Result<String> {
         let peer_id = Uuid::new_v4().to_string();
-        let udp_token = Uuid::new_v4().to_string();
+        let room_code = new_room_code();
         let peer_map = Arc::new(RwLock::new(HashMap::<SocketAddr, String>::new()));
 
         self.overwrite_status(NetworkStatus {
             mode: SessionMode::Host,
             state: ConnectionState::Starting,
-            signaling_server: self.inner.signaling.ws_url.clone(),
-            note: Some("Подготавливаю комнату.".into()),
-            logs: vec!["Создание host-сессии.".into()],
+            signaling_server: self.inner.signaling.broker_label(),
+            note: Some("Узнаю внешний адрес и публикую room code.".into()),
+            logs: vec![format!("Host mode стартовал. Room code: {room_code}")],
             ..Default::default()
         })
         .await;
 
         let (udp_socket, punch_socket, udp_bind_addr) = Self::bind_shared_udp_socket()?;
+        let public_udp_addr =
+            discover_public_addr(punch_socket.clone(), &self.inner.signaling).await?;
         let (server_config, server_cert) = build_server_config()?;
-        self.push_log(format!("Локальный UDP сокет: {udp_bind_addr}"))
-            .await;
 
-        let signal_socket = self.connect_signaling_socket().await?;
-        let (mut writer, mut reader) = signal_socket.split();
-
-        Self::send_signal(
-            &mut writer,
-            &ClientSignal::CreateRoom {
-                peer_id,
-                udp_token: udp_token.clone(),
-                server_cert: BASE64.encode(server_cert),
+        let broker =
+            BrokerConnection::connect(&self.inner.signaling, &format!("mc-host-{peer_id}"))
+                .await
+                .context("failed to connect to public signaling broker")?;
+        subscribe_topic(&broker.client, &room_join_topic(&room_code)).await?;
+        publish_broker_message(
+            &broker.client,
+            &room_offer_topic(&room_code),
+            true,
+            &BrokerMessage::HostOffer {
+                room_code: room_code.clone(),
+                peer_id: peer_id.clone(),
+                peer_addr: public_udp_addr.to_string(),
+                peer_cert: BASE64.encode(server_cert),
             },
         )
         .await?;
 
-        let room_code = loop {
-            match Self::recv_signal(&mut reader).await? {
-                ServerSignal::RoomCreated { room_code } => break room_code,
-                ServerSignal::Error { message } => return Err(anyhow!(message)),
-                _ => continue,
-            }
-        };
-
-        let public_udp_addr =
-            register_udp_mapping(punch_socket.clone(), &self.inner.signaling, &udp_token).await?;
         let endpoint = Endpoint::new(
             EndpointConfig::default(),
             Some(server_config),
@@ -155,28 +142,28 @@ impl NetworkManager {
         )
         .context("failed to create host QUIC endpoint")?;
 
-        let cancel = CancellationToken::new();
         self.overwrite_status(NetworkStatus {
             mode: SessionMode::Host,
             state: ConnectionState::Hosting,
             room_code: Some(room_code.clone()),
             udp_bind_addr: Some(udp_bind_addr.to_string()),
             public_udp_addr: Some(public_udp_addr.to_string()),
-            signaling_server: self.inner.signaling.ws_url.clone(),
-            note: Some("Комната готова. Отдайте код другу.".into()),
+            signaling_server: self.inner.signaling.broker_label(),
+            note: Some("Комната опубликована. Отдайте room code другу.".into()),
             logs: vec![
-                format!("Комната {room_code} создана."),
-                format!("Публичный UDP endpoint: {public_udp_addr}"),
+                format!("Внешний адрес через STUN: {public_udp_addr}"),
+                format!("MQTT broker: {}", self.inner.signaling.broker_label()),
             ],
             ..Default::default()
         })
         .await;
 
+        let cancel = CancellationToken::new();
         let accept_task = self.spawn_host_accept_loop(endpoint, peer_map.clone(), cancel.clone());
-        let signal_task = self.spawn_host_signal_loop(
+        let signal_task = self.spawn_host_broker_loop(
             room_code.clone(),
-            reader,
-            writer,
+            broker.client,
+            broker.receiver,
             punch_socket,
             peer_map,
             cancel.clone(),
@@ -192,63 +179,73 @@ impl NetworkManager {
 
     async fn connect_to_host_inner(&self, room_code: String) -> Result<()> {
         let peer_id = Uuid::new_v4().to_string();
-        let udp_token = Uuid::new_v4().to_string();
 
         self.overwrite_status(NetworkStatus {
             mode: SessionMode::Client,
             state: ConnectionState::Starting,
             room_code: Some(room_code.clone()),
-            signaling_server: self.inner.signaling.ws_url.clone(),
-            note: Some("Ищу хост по room code.".into()),
-            logs: vec![format!("Подключение к комнате {room_code}.")],
+            signaling_server: self.inner.signaling.broker_label(),
+            note: Some("Узнаю внешний адрес и жду host offer.".into()),
+            logs: vec![format!("Client mode стартовал. Комната: {room_code}")],
             ..Default::default()
         })
         .await;
 
         let (udp_socket, punch_socket, udp_bind_addr) = Self::bind_shared_udp_socket()?;
-        let signal_socket = self.connect_signaling_socket().await?;
-        let (mut writer, mut reader) = signal_socket.split();
+        let public_udp_addr =
+            discover_public_addr(punch_socket.clone(), &self.inner.signaling).await?;
 
-        Self::send_signal(
-            &mut writer,
-            &ClientSignal::JoinRoom {
-                peer_id,
+        let mut broker =
+            BrokerConnection::connect(&self.inner.signaling, &format!("mc-client-{peer_id}"))
+                .await
+                .context("failed to connect to public signaling broker")?;
+        subscribe_topic(&broker.client, &room_offer_topic(&room_code)).await?;
+        subscribe_topic(&broker.client, &room_join_topic(&room_code)).await?;
+        publish_broker_message(
+            &broker.client,
+            &room_join_topic(&room_code),
+            false,
+            &BrokerMessage::JoinRequest {
                 room_code: room_code.clone(),
-                udp_token: udp_token.clone(),
+                peer_id: peer_id.clone(),
+                peer_addr: public_udp_addr.to_string(),
             },
         )
         .await?;
 
-        let public_udp_addr =
-            register_udp_mapping(punch_socket.clone(), &self.inner.signaling, &udp_token).await?;
-
-        self.mutate_status(|status| {
-            status.mode = SessionMode::Client;
-            status.state = ConnectionState::WaitingForPeer;
-            status.room_code = Some(room_code.clone());
-            status.udp_bind_addr = Some(udp_bind_addr.to_string());
-            status.public_udp_addr = Some(public_udp_addr.to_string());
-            status.note = Some("Жду ответ от signaling server.".into());
+        self.overwrite_status(NetworkStatus {
+            mode: SessionMode::Client,
+            state: ConnectionState::WaitingForPeer,
+            room_code: Some(room_code.clone()),
+            udp_bind_addr: Some(udp_bind_addr.to_string()),
+            public_udp_addr: Some(public_udp_addr.to_string()),
+            signaling_server: self.inner.signaling.broker_label(),
+            note: Some("Join request отправлен. Жду host offer.".into()),
+            logs: vec![
+                format!("Внешний адрес через STUN: {public_udp_addr}"),
+                format!("MQTT broker: {}", self.inner.signaling.broker_label()),
+            ],
+            ..Default::default()
         })
         .await;
-        self.push_log(format!("Локальный UDP сокет: {udp_bind_addr}"))
-            .await;
 
         let (host_peer_id, host_addr, host_cert) = loop {
-            match Self::recv_signal(&mut reader).await? {
-                ServerSignal::PeerReady {
+            match timeout(Duration::from_secs(12), broker.receiver.recv()).await {
+                Ok(Some(BrokerMessage::HostOffer {
+                    room_code: incoming_room,
                     peer_id,
                     peer_addr,
                     peer_cert,
-                    role,
-                    ..
-                } if role == "host" => {
-                    let host_addr: SocketAddr = peer_addr.parse()?;
-                    let host_cert = peer_cert.ok_or_else(|| anyhow!("host certificate missing"))?;
-                    break (peer_id, host_addr, host_cert);
+                })) if incoming_room == room_code => {
+                    break (peer_id, peer_addr.parse::<SocketAddr>()?, peer_cert);
                 }
-                ServerSignal::Error { message } => return Err(anyhow!(message)),
-                _ => continue,
+                Ok(Some(_)) => {}
+                Ok(None) => return Err(anyhow!("signaling broker stream closed")),
+                Err(_) => {
+                    return Err(anyhow!(
+                        "host offer not received. Room code invalid or host is offline"
+                    ));
+                }
             }
         };
 
@@ -269,11 +266,9 @@ impl NetworkManager {
                 connected: false,
                 ping_ms: None,
             }];
-            status.note = Some("Пробиваю NAT и устанавливаю QUIC.".into());
+            status.note = Some("Host найден. Пробиваю NAT.".into());
         })
         .await;
-        self.push_log(format!("Получен адрес хоста: {host_addr}"))
-            .await;
 
         let cancel = CancellationToken::new();
         let punch_handle = tokio::spawn({
@@ -306,7 +301,7 @@ impl NetworkManager {
                 connected: true,
                 ping_ms: Some(connection.rtt().as_millis() as u64),
             }];
-            status.note = Some("Подключено. Открывайте Minecraft и заходите на localhost.".into());
+            status.note = Some("Подключено. Заходите в Minecraft на localhost.".into());
         })
         .await;
         self.push_log("Локальный proxy на 127.0.0.1:25565 поднят.".into())
@@ -318,12 +313,10 @@ impl NetworkManager {
             self.spawn_ping_loop(connection.clone(), host_peer_id.clone(), cancel.clone());
         let close_task =
             self.spawn_client_close_loop(connection.clone(), host_peer_id.clone(), cancel.clone());
-        let signal_task =
-            self.spawn_client_signal_loop(reader, writer, host_peer_id, cancel.clone());
 
         *self.inner.session.lock().await = Some(SessionRuntime {
             cancel,
-            tasks: vec![proxy_task, ping_task, close_task, signal_task],
+            tasks: vec![proxy_task, ping_task, close_task],
         });
 
         Ok(())
@@ -356,7 +349,6 @@ impl NetworkManager {
                             .get(&remote)
                             .cloned()
                             .unwrap_or_else(|| remote.to_string());
-
                         manager
                             .upsert_peer(
                                 peer_id.clone(),
@@ -366,7 +358,7 @@ impl NetworkManager {
                             )
                             .await;
                         manager
-                            .push_log(format!("Peer {peer_id} подключился с {remote}"))
+                            .push_log(format!("Peer {peer_id} подключился: {remote}"))
                             .await;
 
                         let connection_cancel = cancel.clone();
@@ -391,36 +383,34 @@ impl NetworkManager {
         })
     }
 
-    fn spawn_host_signal_loop(
+    fn spawn_host_broker_loop(
         &self,
         room_code: String,
-        mut reader: SignalReader,
-        writer: SignalWriter,
+        _client: AsyncClient,
+        mut receiver: tokio::sync::mpsc::UnboundedReceiver<BrokerMessage>,
         punch_socket: Arc<UdpSocket>,
         peer_map: Arc<RwLock<HashMap<SocketAddr, String>>>,
         cancel: CancellationToken,
     ) -> JoinHandle<()> {
         let manager = self.clone();
         tokio::spawn(async move {
-            let _writer = writer;
-
             loop {
                 let message = tokio::select! {
                     _ = cancel.cancelled() => break,
-                    message = Self::recv_signal(&mut reader) => message,
+                    message = receiver.recv() => message,
                 };
 
                 match message {
-                    Ok(ServerSignal::PeerReady {
-                        peer_id, peer_addr, ..
-                    }) => {
+                    Some(BrokerMessage::JoinRequest {
+                        room_code: incoming_room,
+                        peer_id,
+                        peer_addr,
+                    }) if incoming_room == room_code => {
                         let addr: SocketAddr = match peer_addr.parse() {
                             Ok(addr) => addr,
                             Err(error) => {
                                 manager
-                                    .set_nonfatal(format!(
-                                        "signaling прислал некорректный peer_addr: {error}"
-                                    ))
+                                    .set_nonfatal(format!("некорректный адрес клиента: {error}"))
                                     .await;
                                 continue;
                             }
@@ -431,7 +421,7 @@ impl NetworkManager {
                             .upsert_peer(peer_id.clone(), addr, false, None)
                             .await;
                         manager
-                            .push_log(format!("Получен peer {peer_id} с адресом {addr}"))
+                            .push_log(format!("Join request от {peer_id}: {addr}"))
                             .await;
 
                         let punch_cancel = cancel.clone();
@@ -441,26 +431,8 @@ impl NetworkManager {
                             let _ = punch_remote(socket, addr, &room, &peer_id, punch_cancel).await;
                         });
                     }
-                    Ok(ServerSignal::PeerLeft { peer_id }) => {
-                        manager.remove_peer(&peer_id).await;
-                        manager.push_log(format!("Peer {peer_id} вышел.")).await;
-                    }
-                    Ok(ServerSignal::Error { message }) => {
-                        manager
-                            .set_nonfatal(format!("signaling error: {message}"))
-                            .await;
-                    }
-                    Ok(ServerSignal::RoomCreated { .. }) => {}
-                    Err(error) => {
-                        if !cancel.is_cancelled() {
-                            manager
-                                .set_nonfatal(format!(
-                                    "соединение с signaling server потеряно: {error:#}"
-                                ))
-                                .await;
-                        }
-                        break;
-                    }
+                    Some(_) => {}
+                    None => break,
                 }
             }
         })
@@ -552,55 +524,6 @@ impl NetworkManager {
         })
     }
 
-    fn spawn_client_signal_loop(
-        &self,
-        mut reader: SignalReader,
-        writer: SignalWriter,
-        host_peer_id: String,
-        cancel: CancellationToken,
-    ) -> JoinHandle<()> {
-        let manager = self.clone();
-        tokio::spawn(async move {
-            let _writer = writer;
-
-            loop {
-                let message = tokio::select! {
-                    _ = cancel.cancelled() => break,
-                    message = Self::recv_signal(&mut reader) => message,
-                };
-
-                match message {
-                    Ok(ServerSignal::PeerLeft { peer_id }) if peer_id == host_peer_id => {
-                        manager
-                            .mark_fatal(
-                                SessionMode::Client,
-                                None,
-                                &anyhow!("хост вышел из комнаты"),
-                            )
-                            .await;
-                        break;
-                    }
-                    Ok(ServerSignal::Error { message }) => {
-                        manager
-                            .set_nonfatal(format!("signaling error: {message}"))
-                            .await;
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        if !cancel.is_cancelled() {
-                            manager
-                                .set_nonfatal(format!(
-                                    "signaling server недоступен, но P2P сессия уже поднята: {error:#}"
-                                ))
-                                .await;
-                        }
-                        break;
-                    }
-                }
-            }
-        })
-    }
-
     async fn handle_host_connection(
         &self,
         connection: Connection,
@@ -680,60 +603,6 @@ impl NetworkManager {
         Err(last_error.unwrap_or_else(|| anyhow!("unable to establish QUIC session")))
     }
 
-    async fn connect_signaling_socket(&self) -> Result<SignalSocket> {
-        self.ensure_embedded_signaling().await?;
-        let (socket, _) = connect_async(self.inner.signaling.ws_url.as_str())
-            .await
-            .context("failed to connect to signaling websocket")?;
-        Ok(socket)
-    }
-
-    async fn ensure_embedded_signaling(&self) -> Result<()> {
-        if !self.should_start_embedded_signaling() {
-            return Ok(());
-        }
-
-        let mut started = self.inner.embedded_signaling_started.lock().await;
-        if *started {
-            return Ok(());
-        }
-
-        run_local_signaling(self.inner.signaling.clone()).await?;
-        *started = true;
-        drop(started);
-        self.push_log("Встроенный signaling server запущен локально.".into())
-            .await;
-        tokio::time::sleep(Duration::from_millis(150)).await;
-        Ok(())
-    }
-
-    fn should_start_embedded_signaling(&self) -> bool {
-        let ws = self.inner.signaling.ws_url.to_ascii_lowercase();
-        let udp_ip = self.inner.signaling.udp_addr.ip().to_string();
-        (ws.contains("127.0.0.1") || ws.contains("localhost"))
-            && (udp_ip == "127.0.0.1" || udp_ip == "::1")
-    }
-
-    async fn send_signal(writer: &mut SignalWriter, message: &ClientSignal) -> Result<()> {
-        let payload = serde_json::to_string(message)?;
-        writer.send(Message::Text(payload.into())).await?;
-        Ok(())
-    }
-
-    async fn recv_signal(reader: &mut SignalReader) -> Result<ServerSignal> {
-        while let Some(frame) = reader.next().await {
-            match frame? {
-                Message::Text(text) => return Ok(serde_json::from_str(text.as_ref())?),
-                Message::Binary(bytes) => return Ok(serde_json::from_slice(bytes.as_ref())?),
-                Message::Ping(_) | Message::Pong(_) => continue,
-                Message::Close(_) => return Err(anyhow!("signaling websocket closed")),
-                _ => continue,
-            }
-        }
-
-        Err(anyhow!("signaling websocket reached EOF"))
-    }
-
     fn bind_shared_udp_socket() -> Result<(std::net::UdpSocket, Arc<UdpSocket>, SocketAddr)> {
         let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
         socket.set_nonblocking(true)?;
@@ -753,7 +622,7 @@ impl NetworkManager {
         drop(session);
 
         let mut status = NetworkStatus {
-            signaling_server: self.inner.signaling.ws_url.clone(),
+            signaling_server: self.inner.signaling.broker_label(),
             ..Default::default()
         };
         status.logs.push("Сессия сброшена.".into());
@@ -838,13 +707,6 @@ impl NetworkManager {
         .await;
     }
 
-    async fn remove_peer(&self, peer_id: &str) {
-        self.mutate_status(|status| {
-            status.peers.retain(|peer| peer.peer_id != peer_id);
-        })
-        .await;
-    }
-
     async fn set_nonfatal(&self, message: String) {
         let log_message = message.clone();
         self.mutate_status(|status| {
@@ -865,7 +727,7 @@ impl NetworkManager {
             mode,
             state: ConnectionState::Error,
             room_code,
-            signaling_server: self.inner.signaling.ws_url.clone(),
+            signaling_server: self.inner.signaling.broker_label(),
             last_error: Some(formatted.clone()),
             note: Some("Сессия завершилась ошибкой.".into()),
             logs: vec![formatted],

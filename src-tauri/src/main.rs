@@ -4,7 +4,6 @@
 )]
 
 mod cert;
-mod local_signaling;
 mod models;
 mod network;
 mod signaling;
