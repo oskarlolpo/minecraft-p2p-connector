@@ -1,36 +1,22 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
-use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS};
-use serde::{Deserialize, Serialize};
 use tokio::{
     net::{lookup_host, UdpSocket},
-    sync::mpsc,
     time::timeout,
 };
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
-const DEFAULT_MQTT_HOST: &str = "test.mosquitto.org";
-const DEFAULT_MQTT_PORT: u16 = 1883;
 const DEFAULT_STUN_SERVERS: &str =
     "stun.cloudflare.com:3478,stun.l.google.com:19302,stun1.l.google.com:19302";
 
 #[derive(Debug, Clone)]
 pub struct SignalingConfig {
-    pub mqtt_host: String,
-    pub mqtt_port: u16,
     pub stun_servers: Vec<String>,
 }
 
 impl SignalingConfig {
     pub fn from_env() -> Self {
-        let mqtt_host =
-            std::env::var("MC_SIGNAL_MQTT_HOST").unwrap_or_else(|_| DEFAULT_MQTT_HOST.into());
-        let mqtt_port = std::env::var("MC_SIGNAL_MQTT_PORT")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(DEFAULT_MQTT_PORT);
         let stun_servers = std::env::var("MC_STUN_SERVERS")
             .unwrap_or_else(|_| DEFAULT_STUN_SERVERS.into())
             .split(',')
@@ -39,106 +25,8 @@ impl SignalingConfig {
             .map(ToOwned::to_owned)
             .collect();
 
-        Self {
-            mqtt_host,
-            mqtt_port,
-            stun_servers,
-        }
+        Self { stun_servers }
     }
-
-    pub fn broker_label(&self) -> String {
-        format!("mqtt://{}:{}", self.mqtt_host, self.mqtt_port)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum BrokerMessage {
-    HostOffer {
-        room_code: String,
-        peer_id: String,
-        peer_addr: String,
-        peer_cert: String,
-    },
-    JoinRequest {
-        room_code: String,
-        peer_id: String,
-        peer_addr: String,
-    },
-}
-
-pub struct BrokerConnection {
-    pub client: AsyncClient,
-    pub receiver: mpsc::UnboundedReceiver<BrokerMessage>,
-}
-
-impl BrokerConnection {
-    pub async fn connect(config: &SignalingConfig, client_id: &str) -> Result<Self> {
-        let mut mqtt_options = MqttOptions::new(client_id, &config.mqtt_host, config.mqtt_port);
-        mqtt_options.set_keep_alive(Duration::from_secs(5));
-        mqtt_options.set_clean_session(true);
-        mqtt_options.set_max_packet_size(256 * 1024, 256 * 1024);
-
-        let (client, mut eventloop) = AsyncClient::new(mqtt_options, 20);
-        let (tx, rx) = mpsc::unbounded_channel();
-
-        tokio::spawn(async move {
-            loop {
-                match eventloop.poll().await {
-                    Ok(Event::Incoming(Incoming::Publish(publish))) => {
-                        if let Ok(message) =
-                            serde_json::from_slice::<BrokerMessage>(&publish.payload)
-                        {
-                            let _ = tx.send(message);
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(_) => {
-                        tokio::time::sleep(Duration::from_millis(250)).await;
-                    }
-                }
-            }
-        });
-
-        Ok(Self {
-            client,
-            receiver: rx,
-        })
-    }
-}
-
-pub fn room_offer_topic(room_code: &str) -> String {
-    format!("minecraft-p2p-connector/v1/{room_code}/offer")
-}
-
-pub fn room_join_topic(room_code: &str) -> String {
-    format!("minecraft-p2p-connector/v1/{room_code}/join")
-}
-
-pub fn new_room_code() -> String {
-    Uuid::new_v4().simple().to_string()[..6].to_uppercase()
-}
-
-pub async fn publish_broker_message(
-    client: &AsyncClient,
-    topic: &str,
-    retain: bool,
-    message: &BrokerMessage,
-) -> Result<()> {
-    client
-        .publish(
-            topic,
-            QoS::AtLeastOnce,
-            retain,
-            serde_json::to_vec(message)?,
-        )
-        .await?;
-    Ok(())
-}
-
-pub async fn subscribe_topic(client: &AsyncClient, topic: &str) -> Result<()> {
-    client.subscribe(topic, QoS::AtLeastOnce).await?;
-    Ok(())
 }
 
 pub async fn discover_public_addr(
@@ -182,9 +70,7 @@ fn build_stun_binding_request() -> [u8; 20] {
     request[0] = 0x00;
     request[1] = 0x01;
     request[4..8].copy_from_slice(&0x2112_A442u32.to_be_bytes());
-
-    let tx_id = Uuid::new_v4();
-    request[8..20].copy_from_slice(&tx_id.as_bytes()[..12]);
+    request[8..20].copy_from_slice(&uuid::Uuid::new_v4().as_bytes()[..12]);
     request
 }
 
@@ -193,8 +79,7 @@ fn parse_stun_binding_response(request: &[u8; 20], payload: &[u8]) -> Result<Soc
         return Err(anyhow!("short STUN response"));
     }
 
-    let msg_type = u16::from_be_bytes([payload[0], payload[1]]);
-    if msg_type != 0x0101 {
+    if u16::from_be_bytes([payload[0], payload[1]]) != 0x0101 {
         return Err(anyhow!("unexpected STUN response type"));
     }
     if payload[8..20] != request[8..20] {
@@ -251,6 +136,7 @@ fn parse_mapped_address(value: &[u8]) -> Option<SocketAddr> {
     if value.len() < 8 || value[1] != 0x01 {
         return None;
     }
+
     let port = u16::from_be_bytes([value[2], value[3]]);
     let ip = std::net::Ipv4Addr::new(value[4], value[5], value[6], value[7]);
     Some(SocketAddr::new(ip.into(), port))

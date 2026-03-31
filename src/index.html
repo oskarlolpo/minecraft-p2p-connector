@@ -3,88 +3,89 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Minecraft P2P Connector</title>
+    <title>Blood Paradise Hub</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body class="min-h-screen bg-[#091019] text-white">
+  <body class="min-h-screen bg-[#0f0f0f] text-white">
     <main class="mx-auto flex min-h-screen w-full max-w-[520px] flex-col p-4">
       <section class="app-shell">
-        <header class="mb-4 flex items-start justify-between gap-3">
+        <header class="header-strip">
           <div>
-            <p class="text-[11px] uppercase tracking-[0.25em] text-cyan-300/70">Minecraft Java</p>
-            <h1 class="mt-2 text-2xl font-semibold tracking-tight">P2P Connector</h1>
-            <p class="mt-2 text-sm text-slate-300">Прямое подключение без VPN-адаптеров.</p>
+            <p class="eyebrow">Blood Paradise</p>
+            <h1 class="mt-2 text-[28px] font-semibold tracking-tight">Hub</h1>
+            <p class="mt-2 text-sm text-white/60">P2P matchmaking для Minecraft Java без VPN-адаптеров.</p>
           </div>
-          <div class="badge" id="status-chip">Idle</div>
+          <div class="status-pill" id="connection-state">Offline</div>
         </header>
 
-        <section data-view="main" class="view flex-1">
-          <div class="stack">
-            <button id="host-button" class="primary-button">Host Game</button>
-            <button id="connect-button" class="secondary-button">Connect</button>
+        <section class="panel mt-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <p class="panel-label">Global Lobby</p>
+              <p class="mt-1 text-xs text-white/50">Ably Presence: <span id="ably-state">connecting</span></p>
+            </div>
+            <button id="refresh-lobby" class="ghost-button">Refresh</button>
           </div>
 
-          <div class="info-card mt-4">
-            <p class="label">Signal Server</p>
-            <p id="signaling-server" class="mt-2 break-all text-sm text-white/85">n/a</p>
+          <div class="mt-4 grid grid-cols-1 gap-3">
+            <label class="field">
+              <span class="field-label">Room Name</span>
+              <input id="room-name" type="text" maxlength="32" placeholder="Blood Paradise #1" />
+            </label>
+
+            <label class="field">
+              <span class="field-label">Password</span>
+              <input id="room-password" type="password" maxlength="32" placeholder="Optional" />
+            </label>
           </div>
 
-          <div class="info-card mt-4">
-            <p class="label">Последняя ошибка</p>
-            <p id="error-text" class="mt-2 text-sm leading-6 text-amber-300">Нет</p>
+          <div class="mt-4 flex gap-3">
+            <button id="host-button" class="primary-button flex-1">Host</button>
+            <button id="stop-button" class="danger-button flex-1">Stop</button>
+          </div>
+
+          <div class="mt-4 info-grid">
+            <div class="mini-panel">
+              <span class="panel-label">Lobby</span>
+              <span id="lobby-count" class="mini-value">0 servers</span>
+            </div>
+            <div class="mini-panel">
+              <span class="panel-label">Endpoint</span>
+              <span id="public-endpoint" class="mini-value break-all">n/a</span>
+            </div>
           </div>
         </section>
 
-        <section data-view="host" class="view hidden flex-1">
-          <div class="panel-row">
-            <button data-back class="back-button">Назад</button>
-            <div class="mini-stat">
-              <span class="label">Peers</span>
-              <span id="peer-count" class="value">0</span>
+        <section class="panel mt-4 flex-1">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <p class="panel-label">Server Browser</p>
+              <p class="mt-1 text-xs text-white/50">Presence list обновляется в realtime.</p>
             </div>
+            <div class="mini-value" id="selected-server">No selection</div>
           </div>
 
-          <div class="hero-card mt-4">
-            <p class="label">Room Code</p>
-            <div class="mt-3 flex items-center justify-between gap-3">
-              <div id="room-code" class="code">------</div>
-              <button id="copy-room-code" class="small-button">Copy</button>
-            </div>
-            <p id="host-note" class="mt-3 text-sm text-slate-300">Ожидание подключения.</p>
-            <p id="host-endpoint" class="mt-2 text-xs text-white/45">UDP: n/a</p>
-          </div>
-
-          <div class="info-card mt-4">
-            <div class="flex items-center justify-between">
-              <p class="label">Peers</p>
-            </div>
-            <div id="peer-list" class="mt-3 space-y-2"></div>
-          </div>
+          <div id="server-list" class="mt-4 space-y-3"></div>
         </section>
 
-        <section data-view="connect" class="view hidden flex-1">
-          <button data-back class="back-button">Назад</button>
-
-          <div class="hero-card mt-4">
-            <p class="label">Room Code</p>
-            <input
-              id="room-code-input"
-              maxlength="6"
-              placeholder="ABC123"
-              class="room-input mt-3"
-            />
-            <button id="connect-submit" class="primary-button mt-3 w-full">Connect</button>
-            <p id="connect-note" class="mt-3 text-sm text-slate-300">
-              После подключения заходите в Minecraft на localhost.
-            </p>
-            <p id="connect-stage" class="mt-2 text-sm font-medium text-cyan-300">Idle</p>
-            <p id="connect-endpoint" class="mt-1 text-xs text-white/45">UDP: n/a</p>
+        <section class="panel mt-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <p class="panel-label">Tunnel Status</p>
+              <p id="status-note" class="mt-1 text-xs text-white/50">Idle</p>
+            </div>
+            <div class="mini-value" id="peer-count">0 peers</div>
           </div>
+
+          <div class="mt-3 space-y-2" id="peer-list"></div>
         </section>
 
-        <section class="info-card mt-4 flex-1">
-          <p class="label">Журнал</p>
-          <div id="logs" class="mt-3 max-h-[220px] space-y-2 overflow-auto"></div>
+        <section class="panel mt-4 flex-1">
+          <div class="flex items-center justify-between gap-3">
+            <p class="panel-label">Event Log</p>
+            <span class="text-xs text-white/35">professional debugging feed</span>
+          </div>
+          <div id="logs" class="mt-3 max-h-[200px] space-y-2 overflow-auto"></div>
         </section>
       </section>
     </main>

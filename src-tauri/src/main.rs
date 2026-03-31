@@ -18,19 +18,32 @@ struct AppState {
 }
 
 #[tauri::command]
-async fn start_hosting(state: State<'_, AppState>) -> Result<String, String> {
+async fn start_hosting(
+    state: State<'_, AppState>,
+    room_name: String,
+    password: Option<String>,
+) -> Result<String, String> {
     state
         .manager
-        .start_hosting()
+        .start_hosting(room_name, password)
         .await
         .map_err(|error| format!("{error:#}"))
 }
 
 #[tauri::command]
-async fn connect_to_host(state: State<'_, AppState>, room_code: String) -> Result<(), String> {
+async fn stop_hosting(state: State<'_, AppState>) -> Result<(), String> {
     state
         .manager
-        .connect_to_host(room_code)
+        .stop_hosting()
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn connect_to_peer(state: State<'_, AppState>, peer_addr: String) -> Result<(), String> {
+    state
+        .manager
+        .connect_to_peer(peer_addr)
         .await
         .map_err(|error| format!("{error:#}"))
 }
@@ -54,7 +67,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             start_hosting,
-            connect_to_host,
+            stop_hosting,
+            connect_to_peer,
             get_status
         ])
         .run(tauri::generate_context!())

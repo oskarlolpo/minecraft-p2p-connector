@@ -3,8 +3,10 @@ use std::{sync::Arc, time::Duration};
 use anyhow::Result;
 use quinn::{ClientConfig, ServerConfig, TransportConfig, VarInt};
 use rustls::{
-    pki_types::{CertificateDer, PrivatePkcs8KeyDer},
-    RootCertStore,
+    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+    crypto::{verify_tls12_signature, verify_tls13_signature, CryptoProvider},
+    pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName, UnixTime},
+    DigitallySignedStruct, SignatureScheme,
 };
 
 pub fn build_server_config() -> Result<(ServerConfig, Vec<u8>)> {
@@ -19,14 +21,61 @@ pub fn build_server_config() -> Result<(ServerConfig, Vec<u8>)> {
     Ok((server_config, cert_bytes))
 }
 
-pub fn build_client_config(server_cert: &[u8]) -> Result<ClientConfig> {
-    let mut roots = RootCertStore::empty();
-    roots.add(CertificateDer::from(server_cert.to_vec()))?;
+pub fn build_insecure_client_config() -> Result<ClientConfig> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let rustls_config = rustls::ClientConfig::builder_with_provider(provider.clone())
+        .with_safe_default_protocol_versions()?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(SkipServerVerification { provider }))
+        .with_no_client_auth();
 
-    let mut client_config = ClientConfig::with_root_certificates(Arc::new(roots))?;
+    let mut client_config = ClientConfig::new(Arc::new(
+        quinn::crypto::rustls::QuicClientConfig::try_from(rustls_config)?,
+    ));
     client_config.transport_config(Arc::new(tuned_transport()?));
-
     Ok(client_config)
+}
+
+#[derive(Debug)]
+struct SkipServerVerification {
+    provider: Arc<CryptoProvider>,
+}
+
+impl ServerCertVerifier for SkipServerVerification {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> std::result::Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
+        verify_tls12_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+            .map(|_| HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
+        verify_tls13_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+            .map(|_| HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.provider.signature_verification_algorithms.supported_schemes()
+    }
 }
 
 fn tuned_transport() -> Result<TransportConfig> {
