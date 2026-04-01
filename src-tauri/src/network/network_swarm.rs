@@ -1,4 +1,4 @@
-use std::{collections::HashSet, pin::Pin, str::FromStr, sync::Arc, time::Duration};
+﻿use std::{collections::HashSet, pin::Pin, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use futures::StreamExt;
@@ -150,6 +150,12 @@ struct ReverseTunnelReadyPayload {
     multiaddr: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct ConnectionSuccessPayload {
+    addr: String,
+    transport: String,
+}
+
 impl NetworkSwarmManager {
     pub fn new() -> Self {
         Self {
@@ -171,7 +177,7 @@ impl NetworkSwarmManager {
     ) -> Result<SwarmBootstrap> {
         let mut runtime_guard = self.runtime.lock().await;
         if runtime_guard.is_some() {
-            return Err(anyhow!("libp2p-сессия уже активна"));
+            return Err(anyhow!("libp2p-СЃРµСЃСЃРёСЏ СѓР¶Рµ Р°РєС‚РёРІРЅР°"));
         }
 
         let minecraft_version = detect_local_version(local_port).await.ok();
@@ -189,8 +195,8 @@ impl NetworkSwarmManager {
             status.local_game_port = Some(local_port);
             status.minecraft_version = minecraft_version.clone();
             status.password_protected = password_protected;
-            status.note = Some("Запускаем libp2p swarm и резервируем relay при необходимости.".into());
-            push_log(&mut status, format!("Старт хоста \"{room_name}\" через rust-libp2p."));
+            status.note = Some("Р—Р°РїСѓСЃРєР°РµРј libp2p swarm Рё СЂРµР·РµСЂРІРёСЂСѓРµРј relay РїСЂРё РЅРµРѕР±С…РѕРґРёРјРѕСЃС‚Рё.".into());
+            push_log(&mut status, format!("РЎС‚Р°СЂС‚ С…РѕСЃС‚Р° \"{room_name}\" С‡РµСЂРµР· rust-libp2p."));
         }
 
         let (runtime, bootstrap) = spawn_swarm_runtime(
@@ -222,7 +228,7 @@ impl NetworkSwarmManager {
 
         let mut status = self.status.write().await;
         *status = default_status();
-        push_log(&mut status, "libp2p-сессия остановлена.");
+        push_log(&mut status, "libp2p-СЃРµСЃСЃРёСЏ РѕСЃС‚Р°РЅРѕРІР»РµРЅР°.");
         Ok(())
     }
 
@@ -232,17 +238,17 @@ impl NetworkSwarmManager {
         peer_id: String,
         peer_addrs: Vec<String>,
     ) -> Result<()> {
-        let peer_id = PeerId::from_str(&peer_id).context("некорректный PeerId")?;
+        let peer_id = PeerId::from_str(&peer_id).context("РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ PeerId")?;
         let addrs = peer_addrs
             .into_iter()
             .map(|value| {
                 normalize_multiaddr_input(&value)
-                    .with_context(|| format!("некорректный multiaddr: {value}"))
+                    .with_context(|| format!("РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ multiaddr: {value}"))
             })
             .collect::<Result<Vec<_>>>()?;
 
         if addrs.is_empty() {
-            return Err(anyhow!("для подключения нужен хотя бы один multiaddr"));
+            return Err(anyhow!("РґР»СЏ РїРѕРґРєР»СЋС‡РµРЅРёСЏ РЅСѓР¶РµРЅ С…РѕС‚СЏ Р±С‹ РѕРґРёРЅ multiaddr"));
         }
 
         let mut runtime_guard = self.runtime.lock().await;
@@ -253,12 +259,12 @@ impl NetworkSwarmManager {
                 status.mode = SessionMode::Client;
                 status.state = ConnectionState::Starting;
                 status.local_game_port = Some(25565);
-                status.note = Some("Запускаем клиентский libp2p swarm.".into());
-                push_log(&mut status, "Инициализация клиентского swarm для dial + DCUtR.");
+                status.note = Some("Р—Р°РїСѓСЃРєР°РµРј РєР»РёРµРЅС‚СЃРєРёР№ libp2p swarm.".into());
+                push_log(&mut status, "РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ РєР»РёРµРЅС‚СЃРєРѕРіРѕ swarm РґР»СЏ dial + DCUtR.");
             }
 
             let (runtime, _) = spawn_swarm_runtime(
-                app,
+                app.clone(),
                 self.status.clone(),
                 SwarmSessionConfig {
                     mode: SessionMode::Client,
@@ -274,11 +280,11 @@ impl NetworkSwarmManager {
 
         let runtime = runtime_guard
             .as_ref()
-            .context("runtime не был создан")?;
+            .context("runtime РЅРµ Р±С‹Р» СЃРѕР·РґР°РЅ")?;
 
         if runtime.mode == SessionMode::Host {
             return Err(anyhow!(
-                "нельзя dial'ить удалённый peer, пока запущен локальный хост"
+                "РЅРµР»СЊР·СЏ dial'РёС‚СЊ СѓРґР°Р»С‘РЅРЅС‹Р№ peer, РїРѕРєР° Р·Р°РїСѓС‰РµРЅ Р»РѕРєР°Р»СЊРЅС‹Р№ С…РѕСЃС‚"
             ));
         }
 
@@ -296,53 +302,70 @@ impl NetworkSwarmManager {
             status.mode = SessionMode::Client;
             status.state = ConnectionState::Connecting;
             status.transport_path = None;
-            status.note = Some("Устанавливаем libp2p-соединение с peer через direct dial / relay.".into());
+            status.note = Some("РЈСЃС‚Р°РЅР°РІР»РёРІР°РµРј libp2p-СЃРѕРµРґРёРЅРµРЅРёРµ СЃ peer С‡РµСЂРµР· direct dial / relay.".into());
             push_log(
                 &mut status,
                 format!(
-                    "Dial peer {} по {} адрес(ам) через Swarm.",
+                    "Dial peer {} РїРѕ {} Р°РґСЂРµСЃ(Р°Рј) С‡РµСЂРµР· Swarm.",
                     peer_id,
                     addrs.len()
                 ),
             );
         }
 
-        if reverse_target.is_none() {
-            runtime
-                .command_tx
-                .send(SwarmCommand::DialPeer { peer_id, addrs })
+        if let Some(endpoint) = reverse_target {
+            probe_reverse_tunnel_endpoint(&endpoint)
                 .await
-                .context("не удалось отправить dial-команду в swarm")?;
-        } else {
+                .with_context(|| format!("???? ?????????????? ???????????????????? TCP-???????????????????? ?? {}", endpoint.as_socket_label()))?;
+
             let mut status = self.status.write().await;
             status.state = ConnectionState::Connected;
             status.transport_path = Some("reverse-tunnel".into());
             status.note = Some(format!(
-                "Активирован reverse tunnel fallback. Подключайтесь в Minecraft к {}.",
+                "?????????????????????? reverse tunnel fallback. ?????????????????????????? ?? Minecraft ?? {}.",
                 CLIENT_LOCAL_BIND_ADDR
             ));
-            push_log(&mut status, "libp2p dial пропущен: выбран Bore-compatible reverse tunnel.");
+            push_log(
+                &mut status,
+                format!(
+                    "libp2p dial ????????????????: ???????????? Bore-compatible reverse tunnel, TCP handshake ?????????????????????? ?? {}.",
+                    endpoint.as_socket_label()
+                ),
+            );
+            let _ = app.emit(
+                "connection_success",
+                ConnectionSuccessPayload {
+                    addr: endpoint.as_multiaddr(),
+                    transport: "reverse-tunnel".into(),
+                },
+            );
+        } else {
+            runtime
+                .command_tx
+                .send(SwarmCommand::DialPeer { peer_id, addrs })
+                .await
+                .context("???? ?????????????? ?????????????????? dial-?????????????? ?? swarm")?;
         }
 
         Ok(())
     }
 
     pub async fn kick_peer(&self, peer_id: String) -> Result<()> {
-        let peer_id = PeerId::from_str(&peer_id).context("некорректный PeerId")?;
+        let peer_id = PeerId::from_str(&peer_id).context("РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ PeerId")?;
         let runtime_guard = self.runtime.lock().await;
         let runtime = runtime_guard
             .as_ref()
-            .context("нет активной swarm-сессии")?;
+            .context("РЅРµС‚ Р°РєС‚РёРІРЅРѕР№ swarm-СЃРµСЃСЃРёРё")?;
 
         if runtime.mode != SessionMode::Host {
-            return Err(anyhow!("kick_peer доступен только для хоста"));
+            return Err(anyhow!("kick_peer РґРѕСЃС‚СѓРїРµРЅ С‚РѕР»СЊРєРѕ РґР»СЏ С…РѕСЃС‚Р°"));
         }
 
         runtime
             .command_tx
             .send(SwarmCommand::KickPeer { peer_id })
             .await
-            .context("не удалось отправить команду disconnect_peer_id")?;
+            .context("РЅРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РїСЂР°РІРёС‚СЊ РєРѕРјР°РЅРґСѓ disconnect_peer_id")?;
 
         Ok(())
     }
@@ -364,7 +387,7 @@ async fn spawn_swarm_runtime(
         push_log(
             &mut status_guard,
             format!(
-                "Переменная {} пуста. Relay fallback будет доступен только после конфигурации bootstrap-узлов.",
+                "РџРµСЂРµРјРµРЅРЅР°СЏ {} РїСѓСЃС‚Р°. Relay fallback Р±СѓРґРµС‚ РґРѕСЃС‚СѓРїРµРЅ С‚РѕР»СЊРєРѕ РїРѕСЃР»Рµ РєРѕРЅС„РёРіСѓСЂР°С†РёРё bootstrap-СѓР·Р»РѕРІ.",
                 RELAY_BOOTSTRAPS_ENV
             ),
         );
@@ -373,13 +396,13 @@ async fn spawn_swarm_runtime(
         push_log(
             &mut status_guard,
             format!(
-                "Загружено {} relay bootstrap-узлов для Circuit Relay v2.",
+                "Р—Р°РіСЂСѓР¶РµРЅРѕ {} relay bootstrap-СѓР·Р»РѕРІ РґР»СЏ Circuit Relay v2.",
                 relay_addr_strings.len()
             ),
         );
         push_log(
             &mut status_guard,
-            "DNS resolver переключен на Google Public DNS (8.8.8.8 / 8.8.4.4), чтобы не зависеть от DNS провайдера.",
+            "DNS resolver РїРµСЂРµРєР»СЋС‡РµРЅ РЅР° Google Public DNS (8.8.8.8 / 8.8.4.4), С‡С‚РѕР±С‹ РЅРµ Р·Р°РІРёСЃРµС‚СЊ РѕС‚ DNS РїСЂРѕРІР°Р№РґРµСЂР°.",
         );
     }
 
@@ -398,7 +421,7 @@ async fn spawn_swarm_runtime(
 
     swarm
         .listen_on("/ip4/0.0.0.0/tcp/0".parse()?)
-        .context("не удалось открыть libp2p TCP listener")?;
+        .context("РЅРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєСЂС‹С‚СЊ libp2p TCP listener")?;
     let initial_listen_addrs = current_listen_addrs(&swarm);
 
     let cancel = CancellationToken::new();
@@ -410,13 +433,13 @@ async fn spawn_swarm_runtime(
     if config.mode == SessionMode::Host {
         let incoming = stream_control
             .accept(StreamProtocol::new(MINECRAFT_STREAM_PROTOCOL))
-            .context("не удалось зарегистрировать inbound stream handler")?;
+            .context("РЅРµ СѓРґР°Р»РѕСЃСЊ Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°С‚СЊ inbound stream handler")?;
         let app_handle = app.clone();
         let status_handle = status.clone();
         let cancel_handle = cancel.clone();
         let local_port = config
             .host_local_port
-            .context("для host mode обязателен локальный порт Minecraft")?;
+            .context("РґР»СЏ host mode РѕР±СЏР·Р°С‚РµР»РµРЅ Р»РѕРєР°Р»СЊРЅС‹Р№ РїРѕСЂС‚ Minecraft")?;
         handles.push(tokio::spawn(async move {
             run_host_stream_acceptor(app_handle, status_handle, cancel_handle, incoming, local_port)
                 .await;
@@ -553,7 +576,7 @@ async fn run_swarm_actor(
         )
         .await
         {
-            log_status(&status, format!("Не удалось заранее запросить relay reservation: {error:#}"))
+            log_status(&status, format!("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°СЂР°РЅРµРµ Р·Р°РїСЂРѕСЃРёС‚СЊ relay reservation: {error:#}"))
                 .await;
         }
     }
@@ -571,15 +594,15 @@ async fn run_swarm_actor(
         status_guard.password_protected = config.password_protected;
         status_guard.note = Some(match config.mode {
             SessionMode::Host => format!(
-                "Хост \"{}\" активен. Swarm использует TCP + WSS/443 relay transport. Публикуйте PeerId и Multiaddr в Ably.",
+                "РҐРѕСЃС‚ \"{}\" Р°РєС‚РёРІРµРЅ. Swarm РёСЃРїРѕР»СЊР·СѓРµС‚ TCP + WSS/443 relay transport. РџСѓР±Р»РёРєСѓР№С‚Рµ PeerId Рё Multiaddr РІ Ably.",
                 config
                     .room_name
                     .as_deref()
-                    .unwrap_or("Безымянная комната")
+                    .unwrap_or("Р‘РµР·С‹РјСЏРЅРЅР°СЏ РєРѕРјРЅР°С‚Р°")
             ),
             SessionMode::Client => {
                 format!(
-                    "Swarm готов. Minecraft-клиент должен подключаться к {}.",
+                    "Swarm РіРѕС‚РѕРІ. Minecraft-РєР»РёРµРЅС‚ РґРѕР»Р¶РµРЅ РїРѕРґРєР»СЋС‡Р°С‚СЊСЃСЏ Рє {}.",
                     CLIENT_LOCAL_BIND_ADDR
                 )
             }
@@ -633,7 +656,7 @@ async fn run_swarm_actor(
                             reverse_tunnel_handle = Some(handle);
                         }
                         Err(error) => {
-                            log_status(&status, format!("Reverse tunnel fallback не поднялся: {error:#}")).await;
+                            log_status(&status, format!("Reverse tunnel fallback РЅРµ РїРѕРґРЅСЏР»СЃСЏ: {error:#}")).await;
                         }
                     }
                 }
@@ -646,7 +669,7 @@ async fn run_swarm_actor(
                             &status,
                             command,
                         ).await {
-                            log_status(&status, format!("Команда swarm завершилась ошибкой: {error:#}")).await;
+                            log_status(&status, format!("РљРѕРјР°РЅРґР° swarm Р·Р°РІРµСЂС€РёР»Р°СЃСЊ РѕС€РёР±РєРѕР№: {error:#}")).await;
                         }
                     }
                     None => break,
@@ -664,7 +687,7 @@ async fn run_swarm_actor(
                     &mut ready_tx,
                     event,
                 ).await {
-                    log_status(&status, format!("Ошибка обработки SwarmEvent: {error:#}")).await;
+                    log_status(&status, format!("РћС€РёР±РєР° РѕР±СЂР°Р±РѕС‚РєРё SwarmEvent: {error:#}")).await;
                 }
             }
         }
@@ -693,23 +716,23 @@ async fn handle_swarm_command(
 
             swarm
                 .dial(opts)
-                .with_context(|| format!("не удалось dial'ить peer {peer_id}"))?;
+                .with_context(|| format!("РЅРµ СѓРґР°Р»РѕСЃСЊ dial'РёС‚СЊ peer {peer_id}"))?;
 
             let mut status_guard = status.write().await;
             status_guard.state = ConnectionState::Connecting;
             push_log(
                 &mut status_guard,
-                format!("Dial начат для peer {peer_id} через {} адрес(а).", addrs.len()),
+                format!("Dial РЅР°С‡Р°С‚ РґР»СЏ peer {peer_id} С‡РµСЂРµР· {} Р°РґСЂРµСЃ(Р°).", addrs.len()),
             );
         }
         SwarmCommand::KickPeer { peer_id } => {
             swarm
                 .disconnect_peer_id(peer_id)
-                .map_err(|_| anyhow!("peer {peer_id} не подключён"))?;
+                .map_err(|_| anyhow!("peer {peer_id} РЅРµ РїРѕРґРєР»СЋС‡С‘РЅ"))?;
             let mut status_guard = status.write().await;
             push_log(
                 &mut status_guard,
-                format!("Peer {peer_id} отключён через disconnect_peer_id()."),
+                format!("Peer {peer_id} РѕС‚РєР»СЋС‡С‘РЅ С‡РµСЂРµР· disconnect_peer_id()."),
             );
         }
     }
@@ -738,7 +761,7 @@ async fn handle_swarm_event(
                 status_guard.transport_path = Some("relay-reservation".into());
                 push_log(
                     &mut status_guard,
-                    format!("Relay reservation активен: {address_string}"),
+                    format!("Relay reservation Р°РєС‚РёРІРµРЅ: {address_string}"),
                 );
                 let _ = app.emit(
                     "relay_active",
@@ -749,7 +772,7 @@ async fn handle_swarm_event(
             } else {
                 push_log(
                     &mut status_guard,
-                    format!("Swarm слушает на {address_string}"),
+                    format!("Swarm СЃР»СѓС€Р°РµС‚ РЅР° {address_string}"),
                 );
             }
 
@@ -774,7 +797,7 @@ async fn handle_swarm_event(
             status_guard.public_udp_addr = Some(address.to_string());
             push_log(
                 &mut status_guard,
-                format!("Подтверждён внешний адрес swarm: {address}"),
+                format!("РџРѕРґС‚РІРµСЂР¶РґС‘РЅ РІРЅРµС€РЅРёР№ Р°РґСЂРµСЃ swarm: {address}"),
             );
         }
         SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
@@ -785,7 +808,7 @@ async fn handle_swarm_event(
                 let mut status_guard = status.write().await;
                 push_log(
                     &mut status_guard,
-                    format!("Подключён relay bootstrap {peer_id} через {addr}"),
+                    format!("РџРѕРґРєР»СЋС‡С‘РЅ relay bootstrap {peer_id} С‡РµСЂРµР· {addr}"),
                 );
                 if relayed {
                     let _ = app.emit(
@@ -810,16 +833,16 @@ async fn handle_swarm_event(
                 });
                 status_guard.note = Some(if config.mode == SessionMode::Client {
                     format!(
-                        "Туннель активен. Подключайтесь в Minecraft к {}.",
+                        "РўСѓРЅРЅРµР»СЊ Р°РєС‚РёРІРµРЅ. РџРѕРґРєР»СЋС‡Р°Р№С‚РµСЃСЊ РІ Minecraft Рє {}.",
                         CLIENT_LOCAL_BIND_ADDR
                     )
                 } else {
-                    "Peer подключён к вашему хосту через libp2p stream.".into()
+                    "Peer РїРѕРґРєР»СЋС‡С‘РЅ Рє РІР°С€РµРјСѓ С…РѕСЃС‚Сѓ С‡РµСЂРµР· libp2p stream.".into()
                 });
                 push_log(
                     &mut status_guard,
                     format!(
-                        "Peer {peer_id} подключён через {} ({addr})",
+                        "Peer {peer_id} РїРѕРґРєР»СЋС‡С‘РЅ С‡РµСЂРµР· {} ({addr})",
                         if relayed { "relay" } else { "direct" }
                     ),
                 );
@@ -845,7 +868,7 @@ async fn handle_swarm_event(
                 push_log(
                     &mut status_guard,
                     format!(
-                        "Соединение с peer {peer_id} закрыто{}",
+                        "РЎРѕРµРґРёРЅРµРЅРёРµ СЃ peer {peer_id} Р·Р°РєСЂС‹С‚Рѕ{}",
                         cause
                             .as_ref()
                             .map(|error| format!(": {error}"))
@@ -863,11 +886,13 @@ async fn handle_swarm_event(
             if is_relay_bootstrap_error {
                 push_log(
                     &mut status_guard,
-                    format!("Dial error для relay bootstrap {}: {error}", peer_id.unwrap()),
+                    format!("Dial error for relay bootstrap {}: {error}", peer_id.unwrap()),
                 );
-                if config.mode == SessionMode::Host && status_guard.state == ConnectionState::Error {
+                status_guard.last_error = None;
+                if config.mode == SessionMode::Host {
                     status_guard.state = ConnectionState::WaitingForPeer;
-                    status_guard.last_error = None;
+                } else if matches!(status_guard.state, ConnectionState::Error | ConnectionState::Starting) {
+                    status_guard.state = ConnectionState::Idle;
                 }
             } else {
                 status_guard.state = ConnectionState::Error;
@@ -877,7 +902,7 @@ async fn handle_swarm_event(
                     format!(
                         "Dial error{}: {error}",
                         peer_id
-                            .map(|peer| format!(" для {peer}"))
+                            .map(|peer| format!(" for {peer}"))
                             .unwrap_or_default()
                     ),
                 );
@@ -892,7 +917,7 @@ async fn handle_swarm_event(
                 status_guard.note = Some(format!("AutoNAT: {}", nat_status_label(&new)));
                 push_log(
                     &mut status_guard,
-                    format!("AutoNAT статус изменился: {}", nat_status_label(&new)),
+                    format!("AutoNAT СЃС‚Р°С‚СѓСЃ РёР·РјРµРЅРёР»СЃСЏ: {}", nat_status_label(&new)),
                 );
                 if let autonat::NatStatus::Public(addr) = &new {
                     status_guard.public_udp_addr = Some(addr.to_string());
@@ -911,7 +936,7 @@ async fn handle_swarm_event(
                         status_guard.transport_path = Some("direct-hole-punch".into());
                         push_log(
                             &mut status_guard,
-                            format!("DCUtR hole punch успешен для peer {}.", event.remote_peer_id),
+                            format!("DCUtR hole punch СѓСЃРїРµС€РµРЅ РґР»СЏ peer {}.", event.remote_peer_id),
                         );
                     }
                     let _ = app.emit(
@@ -924,7 +949,7 @@ async fn handle_swarm_event(
                 Err(error) => {
                     log_status(
                         status,
-                        format!("DCUtR hole punch для {} не удался: {error}", event.remote_peer_id),
+                        format!("DCUtR hole punch РґР»СЏ {} РЅРµ СѓРґР°Р»СЃСЏ: {error}", event.remote_peer_id),
                     )
                     .await;
                 }
@@ -938,7 +963,7 @@ async fn handle_swarm_event(
             for addr in info.listen_addrs {
                 swarm.add_peer_address(peer_id, addr);
             }
-            log_status(status, format!("Получен identify от peer {peer_id}.")).await;
+            log_status(status, format!("РџРѕР»СѓС‡РµРЅ identify РѕС‚ peer {peer_id}.")).await;
         }
         SwarmEvent::Behaviour(ConnectorEvent::Relay(event)) => {
             log_status(status, format!("Relay client event: {event:?}")).await;
@@ -966,20 +991,20 @@ async fn ensure_relay_reservations(
 
         swarm
             .dial(relay_addr.clone())
-            .with_context(|| format!("не удалось dial'ить relay {relay_addr}"))?;
+            .with_context(|| format!("РЅРµ СѓРґР°Р»РѕСЃСЊ dial'РёС‚СЊ relay {relay_addr}"))?;
 
         let mut reservation_addr = relay_addr.clone();
         reservation_addr.push(Protocol::P2pCircuit);
         swarm
             .listen_on(reservation_addr.clone())
-            .with_context(|| format!("не удалось запросить reservation через {relay_addr}"))?;
+            .with_context(|| format!("РЅРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїСЂРѕСЃРёС‚СЊ reservation С‡РµСЂРµР· {relay_addr}"))?;
 
         relay_reservations.insert(relay_key.clone());
 
         let mut status_guard = status.write().await;
         push_log(
             &mut status_guard,
-            format!("Запрошен Circuit Relay reservation через {relay_key}"),
+            format!("Р—Р°РїСЂРѕС€РµРЅ Circuit Relay reservation С‡РµСЂРµР· {relay_key}"),
         );
     }
 
@@ -997,13 +1022,13 @@ async fn start_host_reverse_tunnel(
 ) -> Result<ReverseTunnelHandle> {
     let local_port = config
         .host_local_port
-        .context("reverse tunnel fallback доступен только в host mode")?;
+        .context("reverse tunnel fallback РґРѕСЃС‚СѓРїРµРЅ С‚РѕР»СЊРєРѕ РІ host mode")?;
     let handle = tunnel::start_reverse_tunnel(
         ReverseTunnelConfig::bore_pub(local_port),
         cancel.clone(),
     )
     .await
-    .context("не удалось открыть Bore-compatible reverse tunnel")?;
+    .context("РЅРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєСЂС‹С‚СЊ Bore-compatible reverse tunnel")?;
 
     let endpoint = handle.endpoint().clone();
     let socket_label = endpoint.as_socket_label();
@@ -1014,12 +1039,12 @@ async fn start_host_reverse_tunnel(
         status_guard.transport_path = Some("reverse-tunnel".into());
         status_guard.public_udp_addr = Some(socket_label.clone());
         status_guard.note = Some(format!(
-            "libp2p relay не ответил вовремя. Активирован reverse tunnel fallback через {}.",
+            "libp2p relay РЅРµ РѕС‚РІРµС‚РёР» РІРѕРІСЂРµРјСЏ. РђРєС‚РёРІРёСЂРѕРІР°РЅ reverse tunnel fallback С‡РµСЂРµР· {}.",
             socket_label
         ));
         push_log(
             &mut status_guard,
-            format!("Bore-compatible reverse tunnel поднят: {}", socket_label),
+            format!("Bore-compatible reverse tunnel РїРѕРґРЅСЏС‚: {}", socket_label),
         );
     }
 
@@ -1070,7 +1095,7 @@ async fn run_host_stream_acceptor(
                     if let Err(error) = pipe_inbound_minecraft_stream(stream, local_game_port).await {
                         log_status(
                             &status_handle,
-                            format!("Inbound stream от {peer_id} завершился ошибкой: {error:#}"),
+                            format!("Inbound stream РѕС‚ {peer_id} Р·Р°РІРµСЂС€РёР»СЃСЏ РѕС€РёР±РєРѕР№: {error:#}"),
                         )
                         .await;
                     } else {
@@ -1101,7 +1126,7 @@ async fn run_client_proxy_listener(
         Err(error) => {
             log_status(
                 &status,
-                format!("Не удалось открыть локальный Minecraft proxy на {CLIENT_LOCAL_BIND_ADDR}: {error}"),
+                format!("РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєСЂС‹С‚СЊ Р»РѕРєР°Р»СЊРЅС‹Р№ Minecraft proxy РЅР° {CLIENT_LOCAL_BIND_ADDR}: {error}"),
             )
             .await;
             return;
@@ -1110,7 +1135,7 @@ async fn run_client_proxy_listener(
 
     log_status(
         &status,
-        format!("Локальный Minecraft proxy слушает на {CLIENT_LOCAL_BIND_ADDR}"),
+        format!("Р›РѕРєР°Р»СЊРЅС‹Р№ Minecraft proxy СЃР»СѓС€Р°РµС‚ РЅР° {CLIENT_LOCAL_BIND_ADDR}"),
     )
     .await;
 
@@ -1124,7 +1149,7 @@ async fn run_client_proxy_listener(
                         let Some(route) = current_route else {
                             log_status(
                                 &status,
-                                format!("Minecraft TCP-клиент {addr} подключился раньше, чем выбран remote peer."),
+                                format!("Minecraft TCP-РєР»РёРµРЅС‚ {addr} РїРѕРґРєР»СЋС‡РёР»СЃСЏ СЂР°РЅСЊС€Рµ, С‡РµРј РІС‹Р±СЂР°РЅ remote peer."),
                             )
                             .await;
                             continue;
@@ -1138,7 +1163,7 @@ async fn run_client_proxy_listener(
                                     if let Err(error) = open_and_pipe_outbound_stream(control, peer_id, tcp_stream).await {
                                         log_status(
                                             &status_handle,
-                                            format!("Ошибка outbound /mc-p2p/1.0.0 для {peer_id}: {error:#}"),
+                                            format!("РћС€РёР±РєР° outbound /mc-p2p/1.0.0 РґР»СЏ {peer_id}: {error:#}"),
                                         )
                                         .await;
                                     }
@@ -1154,10 +1179,11 @@ async fn run_client_proxy_listener(
                                         log_status(
                                             &status_handle,
                                             format!(
-                                                "Ошибка reverse tunnel client bridge для {}: {error:#}",
+                                                "РћС€РёР±РєР° reverse tunnel client bridge РґР»СЏ {}: {error:#}",
                                                 endpoint.as_socket_label()
                                             ),
                                         )
+
                                         .await;
                                     }
                                 }
@@ -1165,7 +1191,7 @@ async fn run_client_proxy_listener(
                         });
                     }
                     Err(error) => {
-                        log_status(&status, format!("Ошибка accept() на локальном proxy: {error}")).await;
+                        log_status(&status, format!("РћС€РёР±РєР° accept() РЅР° Р»РѕРєР°Р»СЊРЅРѕРј proxy: {error}")).await;
                     }
                 }
             }
@@ -1181,11 +1207,11 @@ async fn open_and_pipe_outbound_stream(
     let stream = stream_control
         .open_stream(peer_id, StreamProtocol::new(MINECRAFT_STREAM_PROTOCOL))
         .await
-        .with_context(|| format!("не удалось открыть libp2p stream к {peer_id}"))?;
+        .with_context(|| format!("РЅРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєСЂС‹С‚СЊ libp2p stream Рє {peer_id}"))?;
 
     pipe_bidirectional(tcp_stream, stream)
         .await
-        .with_context(|| format!("copy_bidirectional к {peer_id} завершился ошибкой"))?;
+        .with_context(|| format!("copy_bidirectional Рє {peer_id} Р·Р°РІРµСЂС€РёР»СЃСЏ РѕС€РёР±РєРѕР№"))?;
 
     Ok(())
 }
@@ -1194,11 +1220,11 @@ async fn pipe_inbound_minecraft_stream(stream: Stream, local_game_port: u16) -> 
     let target = format!("127.0.0.1:{local_game_port}");
     let tcp_stream = TcpStream::connect(&target)
         .await
-        .with_context(|| format!("не удалось подключиться к локальному Minecraft на {target}"))?;
+        .with_context(|| format!("РЅРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ Рє Р»РѕРєР°Р»СЊРЅРѕРјСѓ Minecraft РЅР° {target}"))?;
 
     pipe_bidirectional(tcp_stream, stream)
         .await
-        .with_context(|| format!("bridge на локальный Minecraft {target} завершился ошибкой"))?;
+        .with_context(|| format!("bridge РЅР° Р»РѕРєР°Р»СЊРЅС‹Р№ Minecraft {target} Р·Р°РІРµСЂС€РёР»СЃСЏ РѕС€РёР±РєРѕР№"))?;
 
     Ok(())
 }
@@ -1207,8 +1233,29 @@ async fn pipe_bidirectional(mut tcp_stream: TcpStream, p2p_stream: Stream) -> Re
     let mut p2p_stream = p2p_stream.compat();
     let (uploaded, downloaded) = tokio::io::copy_bidirectional(&mut tcp_stream, &mut p2p_stream)
         .await
-        .context("tokio::io::copy_bidirectional вернул ошибку")?;
+        .context("tokio::io::copy_bidirectional РІРµСЂРЅСѓР» РѕС€РёР±РєСѓ")?;
     tracing::debug!("Minecraft tunnel bytes: up={uploaded}, down={downloaded}");
+    Ok(())
+}
+
+async fn probe_reverse_tunnel_endpoint(endpoint: &ReverseTunnelEndpoint) -> Result<()> {
+    let connect_result = timeout(
+        Duration::from_secs(5),
+        TcpStream::connect((endpoint.public_host.as_str(), endpoint.public_port)),
+    )
+    .await
+    .context("reverse tunnel TCP handshake timed out")?;
+
+    let stream = connect_result.with_context(|| {
+        format!(
+            "failed to open TCP connection to {}",
+            endpoint.as_socket_label()
+        )
+    })?;
+    stream
+        .writable()
+        .await
+        .with_context(|| format!("TCP stream to {} never became writable", endpoint.as_socket_label()))?;
     Ok(())
 }
 
@@ -1290,7 +1337,7 @@ fn load_relay_bootstraps() -> Result<Vec<Multiaddr>> {
         .map(|entry| {
             entry
                 .parse::<Multiaddr>()
-                .with_context(|| format!("не удалось распарсить relay multiaddr: {entry}"))
+                .with_context(|| format!("РЅРµ СѓРґР°Р»РѕСЃСЊ СЂР°СЃРїР°СЂСЃРёС‚СЊ relay multiaddr: {entry}"))
         })
         .collect()
 }
@@ -1327,30 +1374,30 @@ fn reverse_tunnel_target_from_addrs(addrs: &[Multiaddr]) -> Option<ReverseTunnel
 fn normalize_multiaddr_input(value: &str) -> Result<Multiaddr> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(anyhow!("пустой адрес"));
+        return Err(anyhow!("РїСѓСЃС‚РѕР№ Р°РґСЂРµСЃ"));
     }
 
     if trimmed.starts_with('/') {
         return trimmed
             .parse::<Multiaddr>()
-            .with_context(|| format!("не удалось распарсить multiaddr: {trimmed}"));
+            .with_context(|| format!("РЅРµ СѓРґР°Р»РѕСЃСЊ СЂР°СЃРїР°СЂСЃРёС‚СЊ multiaddr: {trimmed}"));
     }
 
     let (host, port) = split_host_port(trimmed)
-        .with_context(|| format!("не удалось разобрать host:port адрес: {trimmed}"))?;
+        .with_context(|| format!("РЅРµ СѓРґР°Р»РѕСЃСЊ СЂР°Р·РѕР±СЂР°С‚СЊ host:port Р°РґСЂРµСЃ: {trimmed}"))?;
     let multiaddr = socket_label_to_multiaddr(&host, port);
     multiaddr
         .parse::<Multiaddr>()
-        .with_context(|| format!("не удалось преобразовать в multiaddr: {multiaddr}"))
+        .with_context(|| format!("РЅРµ СѓРґР°Р»РѕСЃСЊ РїСЂРµРѕР±СЂР°Р·РѕРІР°С‚СЊ РІ multiaddr: {multiaddr}"))
 }
 
 fn split_host_port(value: &str) -> Result<(String, u16)> {
     let (host, port_str) = value
         .rsplit_once(':')
-        .ok_or_else(|| anyhow!("ожидается формат host:port"))?;
+        .ok_or_else(|| anyhow!("РѕР¶РёРґР°РµС‚СЃСЏ С„РѕСЂРјР°С‚ host:port"))?;
     let port = port_str
         .parse::<u16>()
-        .with_context(|| format!("некорректный порт: {port_str}"))?;
+        .with_context(|| format!("РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ РїРѕСЂС‚: {port_str}"))?;
     Ok((host.trim_matches(&['[', ']'][..]).to_string(), port))
 }
 

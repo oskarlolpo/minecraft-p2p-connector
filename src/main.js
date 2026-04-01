@@ -939,6 +939,21 @@ await listen("peer_connected", async (event) => {
   renderServers();
 });
 
+await listen("connection_success", async (event) => {
+  state.pendingConnects.clear();
+  state.tunnelReady = true;
+  state.activeTunnelTransport = event.payload?.transport ?? "reverse-tunnel";
+  setMinecraftHint(t("hintConnected"), true);
+  addLog(
+    `${t("tunnelEstablishedLog", { addr: "localhost:25565" })} (${formatTransportLabel(
+      state.activeTunnelTransport,
+    )})`,
+  );
+  const status = await invoke("get_status");
+  renderStatus(status);
+  renderServers();
+});
+
 await listen("reverse_tunnel_ready", async (event) => {
   const endpoint = normalizeToMultiaddr(event.payload?.endpoint ?? null);
   const multiaddr = normalizeToMultiaddr(event.payload?.multiaddr ?? null);
