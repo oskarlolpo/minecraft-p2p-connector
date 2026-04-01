@@ -235,7 +235,10 @@ impl NetworkSwarmManager {
         let peer_id = PeerId::from_str(&peer_id).context("некорректный PeerId")?;
         let addrs = peer_addrs
             .into_iter()
-            .map(|value| value.parse::<Multiaddr>().with_context(|| format!("некорректный multiaddr: {value}")))
+            .map(|value| {
+                normalize_multiaddr_input(&value)
+                    .with_context(|| format!("некорректный multiaddr: {value}"))
+            })
             .collect::<Result<Vec<_>>>()?;
 
         if addrs.is_empty() {
@@ -1319,6 +1322,46 @@ fn reverse_tunnel_target_from_addrs(addrs: &[Multiaddr]) -> Option<ReverseTunnel
             None
         }
     })
+}
+
+fn normalize_multiaddr_input(value: &str) -> Result<Multiaddr> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("пустой адрес"));
+    }
+
+    if trimmed.starts_with('/') {
+        return trimmed
+            .parse::<Multiaddr>()
+            .with_context(|| format!("не удалось распарсить multiaddr: {trimmed}"));
+    }
+
+    let (host, port) = split_host_port(trimmed)
+        .with_context(|| format!("не удалось разобрать host:port адрес: {trimmed}"))?;
+    let multiaddr = socket_label_to_multiaddr(&host, port);
+    multiaddr
+        .parse::<Multiaddr>()
+        .with_context(|| format!("не удалось преобразовать в multiaddr: {multiaddr}"))
+}
+
+fn split_host_port(value: &str) -> Result<(String, u16)> {
+    let (host, port_str) = value
+        .rsplit_once(':')
+        .ok_or_else(|| anyhow!("ожидается формат host:port"))?;
+    let port = port_str
+        .parse::<u16>()
+        .with_context(|| format!("некорректный порт: {port_str}"))?;
+    Ok((host.trim_matches(&['[', ']'][..]).to_string(), port))
+}
+
+fn socket_label_to_multiaddr(host: &str, port: u16) -> String {
+    if host.parse::<std::net::Ipv4Addr>().is_ok() {
+        format!("/ip4/{host}/tcp/{port}")
+    } else if host.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("/ip6/{host}/tcp/{port}")
+    } else {
+        format!("/dns4/{host}/tcp/{port}")
+    }
 }
 
 fn peer_id_from_multiaddr(addr: &Multiaddr) -> Option<PeerId> {

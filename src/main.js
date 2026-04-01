@@ -274,17 +274,41 @@ function sortAdvertisedAddrs(addrs) {
   return [...addrs].sort((left, right) => Number(isLikelyPublicEndpoint(right)) - Number(isLikelyPublicEndpoint(left)));
 }
 
+function normalizeToMultiaddr(value) {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("/")) return trimmed;
+
+  const separator = trimmed.lastIndexOf(":");
+  if (separator <= 0 || separator === trimmed.length - 1) return trimmed;
+
+  const host = trimmed.slice(0, separator).replace(/^\[|\]$/g, "");
+  const port = trimmed.slice(separator + 1);
+  if (!/^\d+$/.test(port)) return trimmed;
+
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    return `/ip4/${host}/tcp/${port}`;
+  }
+  if (host.includes(":")) {
+    return `/ip6/${host}/tcp/${port}`;
+  }
+  return `/dns4/${host}/tcp/${port}`;
+}
+
 function collectAdvertisedAddrs(bootstrap, status) {
   const values = [
     ...(bootstrap?.listenAddrs ?? []),
     status?.publicUdpAddr ?? null,
     status?.udpBindAddr ?? null,
-  ].filter(Boolean);
+  ]
+    .map(normalizeToMultiaddr)
+    .filter(Boolean);
   return sortAdvertisedAddrs([...new Set(values)]);
 }
 
 function advertisedEndpoint(addrs, explicitEndpoint = null) {
-  return explicitEndpoint ?? addrs.find((addr) => isLikelyPublicEndpoint(addr)) ?? addrs[0] ?? null;
+  return normalizeToMultiaddr(explicitEndpoint) ?? addrs.find((addr) => isLikelyPublicEndpoint(addr)) ?? addrs[0] ?? null;
 }
 
 function canAdvertiseHost() {
@@ -487,9 +511,9 @@ function hydrateServers(members) {
     .map((member) => {
       const data = member.data ?? {};
       const peerAddrs = sortAdvertisedAddrs(
-        Array.isArray(data.listen_addrs) ? data.listen_addrs.filter(Boolean) : [],
+        Array.isArray(data.listen_addrs) ? data.listen_addrs.map(normalizeToMultiaddr).filter(Boolean) : [],
       );
-      const endpoint = data.endpoint ?? advertisedEndpoint(peerAddrs);
+      const endpoint = normalizeToMultiaddr(data.endpoint) ?? advertisedEndpoint(peerAddrs);
       return {
         clientId: member.clientId,
         roomName: data.room_name ?? "Unnamed room",
@@ -829,9 +853,12 @@ async function connectToServer(server) {
 
   try {
     addLog(t("connectProgress", { room: server.roomName, addr: server.peerAddr }));
+    const peerAddrs = sortAdvertisedAddrs(
+      [...new Set([...(server.peerAddrs ?? []), normalizeToMultiaddr(server.peerAddr)].filter(Boolean))],
+    );
     await invoke("connect_to_peer", {
       peerId: server.peerId,
-      peerAddrs: server.peerAddrs,
+      peerAddrs,
     });
     const status = await waitForStatus(
       (snapshot) => snapshot.mode === "client" && ["connecting", "connected"].includes(snapshot.state),
@@ -913,8 +940,8 @@ await listen("peer_connected", async (event) => {
 });
 
 await listen("reverse_tunnel_ready", async (event) => {
-  const endpoint = event.payload?.endpoint ?? null;
-  const multiaddr = event.payload?.multiaddr ?? null;
+  const endpoint = normalizeToMultiaddr(event.payload?.endpoint ?? null);
+  const multiaddr = normalizeToMultiaddr(event.payload?.multiaddr ?? null);
   if (multiaddr) {
     hostSession.listenAddrs = sortAdvertisedAddrs([...new Set([multiaddr, ...hostSession.listenAddrs])]);
   }
