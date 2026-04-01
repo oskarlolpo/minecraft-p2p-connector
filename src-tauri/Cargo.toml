@@ -12,13 +12,14 @@ tauri-build = { version = "2.0" }
 [dependencies]
 anyhow = "1.0"
 futures = "0.3"
-libp2p = { version = "0.56.0", features = ["autonat", "dcutr", "dns", "identify", "macros", "noise", "quic", "relay", "tcp", "tls", "tokio", "yamux"] }
+libp2p = { version = "0.56.0", features = ["autonat", "dcutr", "dns", "identify", "macros", "noise", "relay", "tcp", "tls", "tokio", "websocket", "yamux"] }
 libp2p-swarm = "0.47.1"
 libp2p-stream = "0.4.0-alpha"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tauri = { version = "2.0", features = ["wry"] }
 tokio = { version = "1.44", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
-tokio-util = { version = "0.7", features = ["compat", "rt"] }
+tokio-util = { version = "0.7", features = ["codec", "compat", "rt"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1.15", features = ["serde", "v4"] }

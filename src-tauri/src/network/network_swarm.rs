@@ -1,4 +1,4 @@
-use std::{collections::HashSet, str::FromStr, sync::Arc, time::Duration};
+use std::{collections::HashSet, pin::Pin, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use futures::StreamExt;
@@ -25,7 +25,10 @@ use tokio_util::{compat::FuturesAsyncReadCompatExt, sync::CancellationToken};
 
 use crate::models::{ConnectionState, NetworkStatus, PeerInfo, SessionMode, SwarmBootstrap};
 
-use super::minecraft::detect_local_version;
+use super::{
+    minecraft::detect_local_version,
+    tunnel::{self, ReverseTunnelConfig, ReverseTunnelEndpoint, ReverseTunnelHandle, DEFAULT_BORE_HOST},
+};
 
 const APP_PROTOCOL: &str = "/blood-paradise-hub/2.0.0";
 const MINECRAFT_STREAM_PROTOCOL: &str = "/mc-p2p/1.0.0";
@@ -34,10 +37,11 @@ const RELAY_BOOTSTRAPS_ENV: &str = "MC_LIBP2P_RELAYS";
 const SIGNALING_LABEL: &str = "Ably Presence (PeerId + Multiaddr)";
 const MAX_LOG_LINES: usize = 240;
 const DEFAULT_RELAY_BOOTSTRAPS: &[&str] = &[
-    "/ip4/147.75.109.213/tcp/4001/p2p/QmNnoo2mRwtCh7MSbdESTvFfT6fA9Snd97Jp1HgrfQd6tZ",
-    "/ip4/145.40.89.195/tcp/4001/p2p/QmZRnm9AnpE966pX1fRj1SskXbY9yv948U8pZcbaXfLnoU",
+    "/dns4/sv15.bootstrap.libp2p.io/tcp/443/wss/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+    "/dns4/ams-1.bootstrap.libp2p.io/tcp/443/wss/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
 ];
-const BOOTSTRAP_READY_TIMEOUT_SECS: u64 = 8;
+const BOOTSTRAP_READY_TIMEOUT_SECS: u64 = 18;
+const REVERSE_TUNNEL_FALLBACK_SECS: u64 = 15;
 
 #[derive(NetworkBehaviour)]
 #[behaviour(prelude = "libp2p_swarm::derive_prelude", to_swarm = "ConnectorEvent")]
@@ -96,7 +100,7 @@ pub struct NetworkSwarmManager {
 
 struct SwarmRuntime {
     mode: SessionMode,
-    active_peer: Arc<RwLock<Option<PeerId>>>,
+    active_route: Arc<RwLock<Option<ActiveRoute>>>,
     command_tx: mpsc::Sender<SwarmCommand>,
     cancel: CancellationToken,
     handles: Vec<JoinHandle<()>>,
@@ -105,6 +109,12 @@ struct SwarmRuntime {
 enum SwarmCommand {
     DialPeer { peer_id: PeerId, addrs: Vec<Multiaddr> },
     KickPeer { peer_id: PeerId },
+}
+
+#[derive(Debug, Clone)]
+enum ActiveRoute {
+    Libp2pPeer(PeerId),
+    ReverseTunnel(ReverseTunnelEndpoint),
 }
 
 #[derive(Clone)]
@@ -131,6 +141,12 @@ struct RelayActivePayload {
 #[derive(Debug, Clone, Serialize)]
 struct HolePunchPayload {
     peer_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReverseTunnelReadyPayload {
+    endpoint: String,
+    multiaddr: String,
 }
 
 impl NetworkSwarmManager {
@@ -262,9 +278,13 @@ impl NetworkSwarmManager {
             ));
         }
 
+        let reverse_target = reverse_tunnel_target_from_addrs(&addrs);
         {
-            let mut active_peer = runtime.active_peer.write().await;
-            *active_peer = Some(peer_id);
+            let mut active_route = runtime.active_route.write().await;
+            *active_route = Some(match reverse_target.clone() {
+                Some(endpoint) => ActiveRoute::ReverseTunnel(endpoint),
+                None => ActiveRoute::Libp2pPeer(peer_id),
+            });
         }
 
         {
@@ -283,11 +303,22 @@ impl NetworkSwarmManager {
             );
         }
 
-        runtime
-            .command_tx
-            .send(SwarmCommand::DialPeer { peer_id, addrs })
-            .await
-            .context("не удалось отправить dial-команду в swarm")?;
+        if reverse_target.is_none() {
+            runtime
+                .command_tx
+                .send(SwarmCommand::DialPeer { peer_id, addrs })
+                .await
+                .context("не удалось отправить dial-команду в swarm")?;
+        } else {
+            let mut status = self.status.write().await;
+            status.state = ConnectionState::Connected;
+            status.transport_path = Some("reverse-tunnel".into());
+            status.note = Some(format!(
+                "Активирован reverse tunnel fallback. Подключайтесь в Minecraft к {}.",
+                CLIENT_LOCAL_BIND_ADDR
+            ));
+            push_log(&mut status, "libp2p dial пропущен: выбран Bore-compatible reverse tunnel.");
+        }
 
         Ok(())
     }
@@ -344,7 +375,7 @@ async fn spawn_swarm_runtime(
         );
     }
 
-    let mut swarm = build_swarm()?;
+    let mut swarm = build_swarm().await?;
     let local_peer_id = *swarm.local_peer_id();
     let mut stream_control = swarm.behaviour().stream.new_control();
 
@@ -360,13 +391,10 @@ async fn spawn_swarm_runtime(
     swarm
         .listen_on("/ip4/0.0.0.0/tcp/0".parse()?)
         .context("не удалось открыть libp2p TCP listener")?;
-    swarm
-        .listen_on("/ip4/0.0.0.0/udp/0/quic-v1".parse()?)
-        .context("не удалось открыть libp2p QUIC listener")?;
     let initial_listen_addrs = current_listen_addrs(&swarm);
 
     let cancel = CancellationToken::new();
-    let active_peer = Arc::new(RwLock::new(None));
+    let active_route = Arc::new(RwLock::new(None));
     let (command_tx, command_rx) = mpsc::channel(32);
     let (ready_tx, ready_rx) = oneshot::channel();
     let mut handles = Vec::new();
@@ -390,14 +418,14 @@ async fn spawn_swarm_runtime(
         let status_handle = status.clone();
         let cancel_handle = cancel.clone();
         let control_handle = stream_control.clone();
-        let active_peer_handle = active_peer.clone();
+        let active_route_handle = active_route.clone();
         handles.push(tokio::spawn(async move {
             run_client_proxy_listener(
                 app_handle,
                 status_handle,
                 cancel_handle,
                 control_handle,
-                active_peer_handle,
+                active_route_handle,
             )
             .await;
         }));
@@ -435,7 +463,7 @@ async fn spawn_swarm_runtime(
     Ok((
         SwarmRuntime {
             mode: config.mode,
-            active_peer,
+            active_route,
             command_tx,
             cancel,
             handles,
@@ -444,7 +472,7 @@ async fn spawn_swarm_runtime(
     ))
 }
 
-fn build_swarm() -> Result<Swarm<ConnectorBehaviour>> {
+async fn build_swarm() -> Result<Swarm<ConnectorBehaviour>> {
     let swarm = SwarmBuilder::with_new_identity()
         .with_tokio()
         .with_tcp(
@@ -452,10 +480,17 @@ fn build_swarm() -> Result<Swarm<ConnectorBehaviour>> {
             (tls::Config::new, noise::Config::new),
             yamux::Config::default,
         )?
-        .with_quic()
         .with_dns()?
-        .with_relay_client((tls::Config::new, noise::Config::new), yamux::Config::default)?
-        .with_behaviour(|key, relay| {
+        .with_websocket(
+            (libp2p::tls::Config::new, libp2p::noise::Config::new),
+            libp2p::yamux::Config::default,
+        )
+        .await?
+        .with_relay_client(
+            (libp2p::tls::Config::new, libp2p::noise::Config::new),
+            libp2p::yamux::Config::default,
+        )?
+        .with_behaviour(|key: &libp2p::identity::Keypair, relay| {
             let local_peer_id = key.public().to_peer_id();
             Ok(ConnectorBehaviour {
                 relay,
@@ -489,6 +524,13 @@ async fn run_swarm_actor(
         .collect::<HashSet<_>>();
     let mut relay_reservations = HashSet::new();
     let mut ready_tx = Some(ready_tx);
+    let mut reverse_tunnel_handle: Option<ReverseTunnelHandle> = None;
+    let mut reverse_tunnel_deadline: Option<Pin<Box<tokio::time::Sleep>>> =
+        (config.mode == SessionMode::Host).then(|| {
+            Box::pin(tokio::time::sleep(Duration::from_secs(
+                REVERSE_TUNNEL_FALLBACK_SECS,
+            )))
+        });
 
     if !relay_bootstraps.is_empty() {
         if let Err(error) = ensure_relay_reservations(
@@ -517,7 +559,7 @@ async fn run_swarm_actor(
         status_guard.password_protected = config.password_protected;
         status_guard.note = Some(match config.mode {
             SessionMode::Host => format!(
-                "Хост \"{}\" активен. Swarm слушает TCP/QUIC. Публикуйте PeerId и Multiaddr в Ably.",
+                "Хост \"{}\" активен. Swarm использует TCP + WSS/443 relay transport. Публикуйте PeerId и Multiaddr в Ably.",
                 config
                     .room_name
                     .as_deref()
@@ -555,6 +597,35 @@ async fn run_swarm_actor(
             _ = cancel.cancelled() => {
                 break;
             }
+            _ = async {
+                if let Some(deadline) = &mut reverse_tunnel_deadline {
+                    deadline.as_mut().await;
+                } else {
+                    futures::future::pending::<()>().await;
+                }
+            }, if reverse_tunnel_deadline.is_some() => {
+                reverse_tunnel_deadline = None;
+                if ready_tx.is_some() && reverse_tunnel_handle.is_none() {
+                    let local_peer_id = *swarm.local_peer_id();
+                    let listen_addrs = current_listen_addrs(&swarm);
+                    match start_host_reverse_tunnel(
+                        &app,
+                        &status,
+                        &config,
+                        &cancel,
+                        &mut ready_tx,
+                        local_peer_id,
+                        listen_addrs,
+                    ).await {
+                        Ok(handle) => {
+                            reverse_tunnel_handle = Some(handle);
+                        }
+                        Err(error) => {
+                            log_status(&status, format!("Reverse tunnel fallback не поднялся: {error:#}")).await;
+                        }
+                    }
+                }
+            }
             maybe_cmd = command_rx.recv() => {
                 match maybe_cmd {
                     Some(command) => {
@@ -585,6 +656,10 @@ async fn run_swarm_actor(
                 }
             }
         }
+    }
+
+    if let Some(handle) = reverse_tunnel_handle.as_ref() {
+        handle.abort();
     }
 }
 
@@ -884,6 +959,69 @@ async fn ensure_relay_reservations(
     Ok(())
 }
 
+async fn start_host_reverse_tunnel(
+    app: &AppHandle,
+    status: &Arc<RwLock<NetworkStatus>>,
+    config: &SwarmSessionConfig,
+    cancel: &CancellationToken,
+    ready_tx: &mut Option<oneshot::Sender<SwarmBootstrap>>,
+    local_peer_id: PeerId,
+    existing_listen_addrs: Vec<String>,
+) -> Result<ReverseTunnelHandle> {
+    let local_port = config
+        .host_local_port
+        .context("reverse tunnel fallback доступен только в host mode")?;
+    let handle = tunnel::start_reverse_tunnel(
+        ReverseTunnelConfig::bore_pub(local_port),
+        cancel.clone(),
+    )
+    .await
+    .context("не удалось открыть Bore-compatible reverse tunnel")?;
+
+    let endpoint = handle.endpoint().clone();
+    let socket_label = endpoint.as_socket_label();
+    let endpoint_multiaddr = endpoint.as_multiaddr();
+
+    {
+        let mut status_guard = status.write().await;
+        status_guard.transport_path = Some("reverse-tunnel".into());
+        status_guard.public_udp_addr = Some(socket_label.clone());
+        status_guard.note = Some(format!(
+            "libp2p relay не ответил вовремя. Активирован reverse tunnel fallback через {}.",
+            socket_label
+        ));
+        push_log(
+            &mut status_guard,
+            format!("Bore-compatible reverse tunnel поднят: {}", socket_label),
+        );
+    }
+
+    let _ = app.emit(
+        "reverse_tunnel_ready",
+        ReverseTunnelReadyPayload {
+            endpoint: socket_label.clone(),
+            multiaddr: endpoint_multiaddr.clone(),
+        },
+    );
+
+    if let Some(sender) = ready_tx.take() {
+        let mut listen_addrs = existing_listen_addrs;
+        listen_addrs.push(endpoint_multiaddr);
+        listen_addrs.sort();
+        listen_addrs.dedup();
+
+        let _ = sender.send(SwarmBootstrap {
+            peer_id: local_peer_id.to_string(),
+            listen_addrs,
+            relay_addrs: Vec::new(),
+            nat_status: "reverse-tunnel".into(),
+            local_game_port: config.host_local_port,
+        });
+    }
+
+    Ok(handle)
+}
+
 async fn run_host_stream_acceptor(
     app: AppHandle,
     status: Arc<RwLock<NetworkStatus>>,
@@ -929,7 +1067,7 @@ async fn run_client_proxy_listener(
     status: Arc<RwLock<NetworkStatus>>,
     cancel: CancellationToken,
     stream_control: StreamControl,
-    active_peer: Arc<RwLock<Option<PeerId>>>,
+    active_route: Arc<RwLock<Option<ActiveRoute>>>,
 ) {
     let listener = match TcpListener::bind(CLIENT_LOCAL_BIND_ADDR).await {
         Ok(listener) => listener,
@@ -955,8 +1093,8 @@ async fn run_client_proxy_listener(
             accept_result = listener.accept() => {
                 match accept_result {
                     Ok((tcp_stream, addr)) => {
-                        let current_peer = *active_peer.read().await;
-                        let Some(peer_id) = current_peer else {
+                        let current_route = active_route.read().await.clone();
+                        let Some(route) = current_route else {
                             log_status(
                                 &status,
                                 format!("Minecraft TCP-клиент {addr} подключился раньше, чем выбран remote peer."),
@@ -968,12 +1106,34 @@ async fn run_client_proxy_listener(
                         let control = stream_control.clone();
                         let status_handle = status.clone();
                         tokio::spawn(async move {
-                            if let Err(error) = open_and_pipe_outbound_stream(control, peer_id, tcp_stream).await {
-                                log_status(
-                                    &status_handle,
-                                    format!("Ошибка outbound /mc-p2p/1.0.0 для {peer_id}: {error:#}"),
-                                )
-                                .await;
+                            match route {
+                                ActiveRoute::Libp2pPeer(peer_id) => {
+                                    if let Err(error) = open_and_pipe_outbound_stream(control, peer_id, tcp_stream).await {
+                                        log_status(
+                                            &status_handle,
+                                            format!("Ошибка outbound /mc-p2p/1.0.0 для {peer_id}: {error:#}"),
+                                        )
+                                        .await;
+                                    }
+                                }
+                                ActiveRoute::ReverseTunnel(endpoint) => {
+                                    if let Err(error) = tunnel::bridge_tcp_to_remote(
+                                        tcp_stream,
+                                        &endpoint.public_host,
+                                        endpoint.public_port,
+                                    )
+                                    .await
+                                    {
+                                        log_status(
+                                            &status_handle,
+                                            format!(
+                                                "Ошибка reverse tunnel client bridge для {}: {error:#}",
+                                                endpoint.as_socket_label()
+                                            ),
+                                        )
+                                        .await;
+                                    }
+                                }
                             }
                         });
                     }
@@ -1123,11 +1283,53 @@ fn should_publish_bootstrap_addr(address: &Multiaddr, relay_bootstraps: &[Multia
     relay_bootstraps.is_empty() || is_relay_addr(address)
 }
 
+fn reverse_tunnel_target_from_addrs(addrs: &[Multiaddr]) -> Option<ReverseTunnelEndpoint> {
+    addrs.iter().find_map(|addr| {
+        let (host, port) = tcp_host_and_port_from_multiaddr(addr)?;
+        if host.eq_ignore_ascii_case(DEFAULT_BORE_HOST) {
+            Some(ReverseTunnelEndpoint {
+                public_host: host,
+                public_port: port,
+            })
+        } else {
+            None
+        }
+    })
+}
+
 fn peer_id_from_multiaddr(addr: &Multiaddr) -> Option<PeerId> {
     addr.iter().find_map(|protocol| match protocol {
         Protocol::P2p(peer_id) => Some(peer_id),
         _ => None,
     })
+}
+
+fn tcp_host_and_port_from_multiaddr(addr: &Multiaddr) -> Option<(String, u16)> {
+    let mut host = None;
+    let mut port = None;
+
+    for protocol in addr.iter() {
+        match protocol {
+            Protocol::Dns(domain) | Protocol::Dns4(domain) | Protocol::Dns6(domain) => {
+                host = Some(domain.to_string());
+            }
+            Protocol::Ip4(ip) => {
+                host = Some(ip.to_string());
+            }
+            Protocol::Ip6(ip) => {
+                host = Some(ip.to_string());
+            }
+            Protocol::Tcp(value) => {
+                port = Some(value);
+            }
+            _ => {}
+        }
+    }
+
+    match (host, port) {
+        (Some(host), Some(port)) => Some((host, port)),
+        _ => None,
+    }
 }
 
 fn connected_point_addr(endpoint: &ConnectedPoint) -> &Multiaddr {
