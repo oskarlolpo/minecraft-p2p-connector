@@ -1,8 +1,9 @@
-use std::time::Duration;
+use std::{io::ErrorKind, time::Duration};
 
 use anyhow::{anyhow, bail, Context, Result};
 use futures::{SinkExt, StreamExt};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use socket2::{SockRef, TcpKeepalive};
 use tokio::{
     io::{AsyncRead, AsyncWrite, AsyncWriteExt},
     net::TcpStream,
@@ -19,6 +20,9 @@ pub const DEFAULT_BORE_HOST: &str = "bore.pub";
 pub const DEFAULT_BORE_CONTROL_PORT: u16 = 7835;
 const FRAME_MAX_LENGTH: usize = 256;
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
+const BRIDGE_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+const LOCAL_TARGET_RETRY_DELAY: Duration = Duration::from_millis(350);
+const LOCAL_TARGET_RETRY_ATTEMPTS: usize = 5;
 
 #[derive(Debug, Clone)]
 pub struct ReverseTunnelConfig {
@@ -124,10 +128,16 @@ pub async fn bridge_tcp_to_remote(
     remote_host: &str,
     remote_port: u16,
 ) -> Result<()> {
+    configure_tcp_stream(&local_stream)
+        .with_context(|| format!("не удалось настроить локальный TCP stream для {remote_host}:{remote_port}"))?;
+
     let mut remote_stream = connect_with_timeout(remote_host, remote_port)
         .await
         .with_context(|| format!("не удалось подключиться к reverse tunnel endpoint {remote_host}:{remote_port}"))?;
-    tokio::io::copy_bidirectional(&mut local_stream, &mut remote_stream)
+    configure_tcp_stream(&remote_stream)
+        .with_context(|| format!("не удалось настроить reverse tunnel stream для {remote_host}:{remote_port}"))?;
+
+    copy_bidirectional_tolerant(&mut local_stream, &mut remote_stream)
         .await
         .context("copy_bidirectional через reverse tunnel завершился ошибкой")?;
     Ok(())
@@ -172,9 +182,11 @@ async fn accept_reverse_connection(config: ReverseTunnelConfig, id: Uuid) -> Res
         .await
         .context("не удалось отправить Accept на reverse tunnel server")?;
 
-    let mut local = connect_with_timeout(&config.local_host, config.local_port)
+    let mut local = connect_local_target_with_retry(&config.local_host, config.local_port)
         .await
         .with_context(|| format!("не удалось подключиться к локальному target {}:{}", config.local_host, config.local_port))?;
+    configure_tcp_stream(&local)
+        .with_context(|| format!("не удалось настроить локальный target {}:{}", config.local_host, config.local_port))?;
 
     let mut parts = remote.into_parts();
     if !parts.read_buf.is_empty() {
@@ -183,17 +195,78 @@ async fn accept_reverse_connection(config: ReverseTunnelConfig, id: Uuid) -> Res
             .await
             .context("не удалось отправить buffered bytes в локальный target")?;
     }
-    tokio::io::copy_bidirectional(&mut local, &mut parts.io)
+
+    copy_bidirectional_tolerant(&mut local, &mut parts.io)
         .await
         .context("copy_bidirectional reverse tunnel завершился ошибкой")?;
     Ok(())
 }
 
 async fn connect_with_timeout(host: &str, port: u16) -> Result<TcpStream> {
-    timeout(CONTROL_TIMEOUT, TcpStream::connect((host, port)))
+    let stream = timeout(BRIDGE_CONNECT_TIMEOUT, TcpStream::connect((host, port)))
         .await
         .context("таймаут TCP connect")?
-        .with_context(|| format!("не удалось подключиться к {host}:{port}"))
+        .with_context(|| format!("не удалось подключиться к {host}:{port}"))?;
+    configure_tcp_stream(&stream)
+        .with_context(|| format!("не удалось настроить TCP stream для {host}:{port}"))?;
+    Ok(stream)
+}
+
+async fn connect_local_target_with_retry(host: &str, port: u16) -> Result<TcpStream> {
+    let mut last_error = None;
+
+    for attempt in 1..=LOCAL_TARGET_RETRY_ATTEMPTS {
+        match connect_with_timeout(host, port).await {
+            Ok(stream) => return Ok(stream),
+            Err(error) => {
+                tracing::warn!(
+                    "local target {}:{} is not ready on attempt {}/{}: {error:#}",
+                    host,
+                    port,
+                    attempt,
+                    LOCAL_TARGET_RETRY_ATTEMPTS
+                );
+                last_error = Some(error);
+                if attempt < LOCAL_TARGET_RETRY_ATTEMPTS {
+                    tokio::time::sleep(LOCAL_TARGET_RETRY_DELAY).await;
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow!("локальный target {host}:{port} недоступен")))
+}
+
+fn configure_tcp_stream(stream: &TcpStream) -> Result<()> {
+    stream.set_nodelay(true).context("set_nodelay failed")?;
+    let keepalive = TcpKeepalive::new()
+        .with_time(Duration::from_secs(20))
+        .with_interval(Duration::from_secs(10));
+    let socket = SockRef::from(stream);
+    socket.set_tcp_keepalive(&keepalive).context("set_tcp_keepalive failed")?;
+    Ok(())
+}
+
+async fn copy_bidirectional_tolerant<A, B>(left: &mut A, right: &mut B) -> Result<()>
+where
+    A: AsyncRead + AsyncWrite + Unpin,
+    B: AsyncRead + AsyncWrite + Unpin,
+{
+    match tokio::io::copy_bidirectional(left, right).await {
+        Ok(_) => Ok(()),
+        Err(error) if is_connection_close(&error) => {
+            tracing::debug!("reverse tunnel bridge closed by peer: {error}");
+            Ok(())
+        }
+        Err(error) => Err(error).context("tokio::io::copy_bidirectional вернул ошибку"),
+    }
+}
+
+fn is_connection_close(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        ErrorKind::ConnectionReset | ErrorKind::BrokenPipe | ErrorKind::UnexpectedEof | ErrorKind::ConnectionAborted
+    )
 }
 
 struct Delimited<U>(Framed<U, AnyDelimiterCodec>);

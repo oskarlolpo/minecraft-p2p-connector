@@ -17,6 +17,7 @@ libp2p-swarm = "0.47.1"
 libp2p-stream = "0.4.0-alpha"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+socket2 = "0.5"
 tauri = { version = "2.0", features = ["wry"] }
 tokio = { version = "1.44", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "compat", "rt"] }

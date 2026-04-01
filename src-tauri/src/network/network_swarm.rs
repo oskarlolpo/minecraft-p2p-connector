@@ -185,6 +185,7 @@ impl NetworkSwarmManager {
             .as_ref()
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false);
+        let local_target_ready = verify_local_minecraft_target(local_port).await.is_ok();
 
         {
             let mut status = self.status.write().await;
@@ -197,6 +198,14 @@ impl NetworkSwarmManager {
             status.password_protected = password_protected;
             status.note = Some("Р—Р°РїСѓСЃРєР°РµРј libp2p swarm Рё СЂРµР·РµСЂРІРёСЂСѓРµРј relay РїСЂРё РЅРµРѕР±С…РѕРґРёРјРѕСЃС‚Рё.".into());
             push_log(&mut status, format!("РЎС‚Р°СЂС‚ С…РѕСЃС‚Р° \"{room_name}\" С‡РµСЂРµР· rust-libp2p."));
+            if !local_target_ready {
+                push_log(
+                    &mut status,
+                    format!(
+                        "Предупреждение: локальный Minecraft на 127.0.0.1:{local_port} недоступен. Откройте мир в LAN или запустите сервер перед подключением игроков."
+                    ),
+                );
+            }
         }
 
         let (runtime, bootstrap) = spawn_swarm_runtime(
@@ -316,19 +325,19 @@ impl NetworkSwarmManager {
         if let Some(endpoint) = reverse_target {
             probe_reverse_tunnel_endpoint(&endpoint)
                 .await
-                .with_context(|| format!("???? ?????????????? ???????????????????? TCP-???????????????????? ?? {}", endpoint.as_socket_label()))?;
+                .with_context(|| format!("не удалось выполнить TCP handshake к {}", endpoint.as_socket_label()))?;
 
             let mut status = self.status.write().await;
             status.state = ConnectionState::Connected;
             status.transport_path = Some("reverse-tunnel".into());
             status.note = Some(format!(
-                "?????????????????????? reverse tunnel fallback. ?????????????????????????? ?? Minecraft ?? {}.",
+                "Reverse tunnel активирован. Подключайтесь в Minecraft к {}.",
                 CLIENT_LOCAL_BIND_ADDR
             ));
             push_log(
                 &mut status,
                 format!(
-                    "libp2p dial ????????????????: ???????????? Bore-compatible reverse tunnel, TCP handshake ?????????????????????? ?? {}.",
+                    "libp2p dial пропущен: выбран Bore-compatible reverse tunnel, TCP handshake подтверждён до {}.",
                     endpoint.as_socket_label()
                 ),
             );
@@ -344,7 +353,7 @@ impl NetworkSwarmManager {
                 .command_tx
                 .send(SwarmCommand::DialPeer { peer_id, addrs })
                 .await
-                .context("???? ?????????????? ?????????????????? dial-?????????????? ?? swarm")?;
+                .context("не удалось отправить dial-команду в swarm")?;
         }
 
         Ok(())
@@ -1023,6 +1032,20 @@ async fn start_host_reverse_tunnel(
     let local_port = config
         .host_local_port
         .context("reverse tunnel fallback РґРѕСЃС‚СѓРїРµРЅ С‚РѕР»СЊРєРѕ РІ host mode")?;
+    if let Err(error) = verify_local_minecraft_target(local_port).await {
+        let mut status_guard = status.write().await;
+        status_guard.last_error = Some(error.to_string());
+        status_guard.note = Some(format!(
+            "Локальный Minecraft на 127.0.0.1:{local_port} недоступен. Откройте мир в LAN или запустите сервер перед публикацией комнаты."
+        ));
+        push_log(
+            &mut status_guard,
+            format!(
+                "Reverse tunnel не опубликован: локальный Minecraft на 127.0.0.1:{local_port} недоступен: {error:#}"
+            ),
+        );
+        return Err(error).with_context(|| format!("локальный Minecraft на 127.0.0.1:{local_port} недоступен"));
+    }
     let handle = tunnel::start_reverse_tunnel(
         ReverseTunnelConfig::bore_pub(local_port),
         cancel.clone(),
@@ -1039,12 +1062,12 @@ async fn start_host_reverse_tunnel(
         status_guard.transport_path = Some("reverse-tunnel".into());
         status_guard.public_udp_addr = Some(socket_label.clone());
         status_guard.note = Some(format!(
-            "libp2p relay РЅРµ РѕС‚РІРµС‚РёР» РІРѕРІСЂРµРјСЏ. РђРєС‚РёРІРёСЂРѕРІР°РЅ reverse tunnel fallback С‡РµСЂРµР· {}.",
+            "libp2p relay не ответил вовремя. Активирован reverse tunnel fallback через {}.",
             socket_label
         ));
         push_log(
             &mut status_guard,
-            format!("Bore-compatible reverse tunnel РїРѕРґРЅСЏС‚: {}", socket_label),
+            format!("Bore-compatible reverse tunnel поднят: {}", socket_label),
         );
     }
 
@@ -1233,8 +1256,21 @@ async fn pipe_bidirectional(mut tcp_stream: TcpStream, p2p_stream: Stream) -> Re
     let mut p2p_stream = p2p_stream.compat();
     let (uploaded, downloaded) = tokio::io::copy_bidirectional(&mut tcp_stream, &mut p2p_stream)
         .await
-        .context("tokio::io::copy_bidirectional РІРµСЂРЅСѓР» РѕС€РёР±РєСѓ")?;
+        .context("tokio::io::copy_bidirectional вернул ошибку")?;
     tracing::debug!("Minecraft tunnel bytes: up={uploaded}, down={downloaded}");
+    Ok(())
+}
+
+async fn verify_local_minecraft_target(local_port: u16) -> Result<()> {
+    let target = ("127.0.0.1", local_port);
+    let stream = timeout(Duration::from_secs(2), TcpStream::connect(target))
+        .await
+        .with_context(|| format!("таймаут при проверке локального Minecraft на 127.0.0.1:{local_port}"))?
+        .with_context(|| format!("локальный Minecraft на 127.0.0.1:{local_port} не принимает TCP-подключение"))?;
+    stream
+        .writable()
+        .await
+        .with_context(|| format!("локальный Minecraft на 127.0.0.1:{local_port} не стал writable"))?;
     Ok(())
 }
 

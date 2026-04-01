@@ -763,7 +763,7 @@ async function startHosting() {
     const bootstrap = await invoke("start_hosting", { roomName, password, localPort });
     const status = await waitForStatus(
       (snapshot) => snapshot.mode === "host" && ["waitingForPeer", "hosting", "connected", "error"].includes(snapshot.state),
-      12000,
+      22000,
     );
     renderStatus(status);
     hostSession.active = true;

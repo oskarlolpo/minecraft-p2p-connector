@@ -2968,6 +2968,7 @@ dependencies = [
  "libp2p-swarm",
  "serde",
  "serde_json",
+ "socket2 0.5.10",
  "tauri",
  "tauri-build",
  "tokio",
