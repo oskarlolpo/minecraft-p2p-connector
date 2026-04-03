@@ -170,10 +170,17 @@
                 <div id="minecraft-target-hint" class="minecraft-hint" data-i18n="hintWaiting">
                   Ожидание туннеля...
                 </div>
+                <label class="field" style="margin-top: 16px;">
+                  <span>Diagnostic Test Port</span>
+                  <input id="test-server-port" type="number" min="1" max="65535" value="25566" />
+                </label>
                 <div class="selected-actions" style="margin-top: 16px;">
                   <button id="run-preflight" class="secondary-button" type="button">Run Preflight</button>
                   <button id="start-test-server" class="secondary-button" type="button">Start Test Server</button>
                   <button id="stop-test-server" class="secondary-button" type="button">Stop Test Server</button>
+                </div>
+                <div class="selected-actions" style="margin-top: 10px;">
+                  <button id="probe-test-server" class="secondary-button" type="button">Connect Test Server</button>
                 </div>
               </section>
 

@@ -38,7 +38,7 @@ pub struct NetworkManager {
 struct Inner {
     control: Mutex<()>,
     session: Mutex<Option<SessionRuntime>>,
-    status: RwLock<NetworkStatus>,
+    status: Arc<RwLock<NetworkStatus>>,
     stun: SignalingConfig,
     relay: RelayConfig,
 }
@@ -103,7 +103,7 @@ impl NetworkManager {
             inner: Arc::new(Inner {
                 control: Mutex::new(()),
                 session: Mutex::new(None),
-                status: RwLock::new(status),
+                status: Arc::new(RwLock::new(status)),
                 stun,
                 relay,
             }),
@@ -112,6 +112,10 @@ impl NetworkManager {
 
     pub async fn get_status(&self) -> NetworkStatus {
         self.inner.status.read().await.clone()
+    }
+
+    pub fn shared_status(&self) -> Arc<RwLock<NetworkStatus>> {
+        self.inner.status.clone()
     }
 
     pub async fn start_hosting(

@@ -118,6 +118,33 @@ impl TestServerManager {
     }
 }
 
+pub async fn probe_test_server(port: u16, payload: String) -> Result<String> {
+    let target = format!("127.0.0.1:{port}");
+    let mut stream = TcpStream::connect(&target)
+        .await
+        .with_context(|| format!("не удалось подключиться к тестовому серверу {target}"))?;
+    let message = format!("{payload}\n");
+    stream
+        .write_all(message.as_bytes())
+        .await
+        .with_context(|| format!("не удалось отправить тестовый пакет на {target}"))?;
+    stream
+        .flush()
+        .await
+        .with_context(|| format!("не удалось flush для {target}"))?;
+
+    let mut buffer = vec![0u8; 2048];
+    let read = stream
+        .read(&mut buffer)
+        .await
+        .with_context(|| format!("не удалось прочитать ответ от {target}"))?;
+    if read == 0 {
+        return Ok(String::new());
+    }
+
+    Ok(String::from_utf8_lossy(&buffer[..read]).trim().to_string())
+}
+
 async fn handle_client(
     mut stream: TcpStream,
     remote_addr: String,

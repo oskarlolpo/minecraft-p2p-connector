@@ -31,6 +31,8 @@ const connectSelectedEl = document.querySelector("#connect-selected");
 const runPreflightEl = document.querySelector("#run-preflight");
 const startTestServerEl = document.querySelector("#start-test-server");
 const stopTestServerEl = document.querySelector("#stop-test-server");
+const probeTestServerEl = document.querySelector("#probe-test-server");
+const testServerPortEl = document.querySelector("#test-server-port");
 const serverListEl = document.querySelector("#server-list");
 const logsEl = document.querySelector("#logs");
 const peerListEl = document.querySelector("#peer-list");
@@ -552,9 +554,10 @@ function buildPresencePayload(status) {
     host_name: localClientId,
     slots: `${Math.max(1, (status?.peerCount ?? 0) + 1)}/30`,
     has_password: hostSession.hasPassword,
-    peer_id: hostSession.peerId,
+    peer_id: hostSession.peerId ?? localClientId,
     listen_addrs: hostSession.listenAddrs,
     endpoint,
+    peer_addr: hostSession.peerAddr,
     local_port: hostSession.localPort,
     minecraft_version: hostSession.minecraftVersion ?? status?.minecraftVersion ?? null,
     transport: status?.transportPath ?? state.activeTunnelTransport ?? null,
@@ -657,13 +660,35 @@ async function ensureChannels() {
 
 async function bindChannelHandlers() {
   await ensureChannels();
-  if (!state.lobbyChannel) return;
+  if (!state.lobbyChannel || !state.privateChannel) return;
 
   if (!state.lobbyChannel.__mcp2pPresenceBound) {
     await state.lobbyChannel.presence.subscribe("enter", () => void refreshLobby());
     await state.lobbyChannel.presence.subscribe("update", () => void refreshLobby());
     await state.lobbyChannel.presence.subscribe("leave", () => void refreshLobby());
     state.lobbyChannel.__mcp2pPresenceBound = true;
+  }
+
+  if (!state.privateChannel.__mcp2pHandshakeBound) {
+    await state.privateChannel.subscribe("connect-request", async (message) => {
+      const peerAddr = message.data?.peer_addr;
+      const requester = message.data?.client_id ?? message.clientId ?? "unknown";
+      const relaySessionId = message.data?.relay_session_id ?? null;
+      addLog(t("incomingHandshake", { peer: requester, addr: peerAddr ?? "n/a" }));
+      if (!peerAddr) return;
+
+      try {
+        await invoke("connect_to_peer", {
+          peerId: requester,
+          peerAddrs: [peerAddr],
+          relaySessionId,
+        });
+        addLog(t("hostPunchSent", { addr: peerAddr }));
+      } catch (error) {
+        addLog(`Punch error: ${String(error)}`);
+      }
+    });
+    state.privateChannel.__mcp2pHandshakeBound = true;
   }
 }
 
@@ -770,7 +795,11 @@ async function runPreflightCheck({ silent = false } = {}) {
 }
 
 async function startEmbeddedTestServer() {
-  const port = Number(localGamePortEl.value || 25565);
+  const port = Number(testServerPortEl.value || 25566);
+  if (port === Number(localGamePortEl.value || 25565)) {
+    addLog("Диагностический сервер нельзя запускать на том же порту, что и Minecraft. Используйте отдельный порт, например 25566.");
+    return;
+  }
   try {
     const info = await invoke("start_test_server", { port });
     state.testServerInfo = info;
@@ -798,6 +827,20 @@ async function copyDiagnosticsSnapshot() {
     addLog("Полная диагностика скопирована в буфер обмена.");
   } catch (error) {
     addLog(`Не удалось выгрузить диагностику: ${String(error)}`);
+  }
+}
+
+async function probeEmbeddedTestServer() {
+  const port = Number(testServerPortEl.value || 25566);
+  try {
+    const payload = `diagnostic-ping:${Date.now()}`;
+    const response = await invoke("probe_test_server_command", {
+      port,
+      payload,
+    });
+    addLog(`Тестовый сервер ответил с 127.0.0.1:${port}: ${response || "<empty>"}`);
+  } catch (error) {
+    addLog(`Не удалось подключиться к тестовому серверу на 127.0.0.1:${port}: ${String(error)}`);
   }
 }
 
@@ -831,7 +874,7 @@ async function startHosting() {
     hostSession.active = true;
     hostSession.roomName = roomName;
     hostSession.hasPassword = Boolean(password);
-    hostSession.peerId = bootstrap.peerId ?? null;
+    hostSession.peerId = bootstrap.peerId || localClientId;
     hostSession.listenAddrs = collectAdvertisedAddrs(bootstrap, status);
     hostSession.peerAddr = advertisedEndpoint(hostSession.listenAddrs, status.publicUdpAddr ?? status.udpBindAddr);
     hostSession.localPort = localPort;
@@ -915,19 +958,30 @@ async function connectToServer(server) {
 
   try {
     addLog(t("connectProgress", { room: server.roomName, addr: server.peerAddr }));
+    const relaySessionId = `relay-${crypto.randomUUID()}`;
     const peerAddrs = sortAdvertisedAddrs(
       [...new Set([...(server.peerAddrs ?? []), normalizeToMultiaddr(server.peerAddr)].filter(Boolean))],
     );
     await invoke("connect_to_peer", {
       peerId: server.peerId,
       peerAddrs,
+      relaySessionId,
     });
     const status = await waitForStatus(
-      (snapshot) => snapshot.mode === "client" && ["connecting", "connected"].includes(snapshot.state),
+      (snapshot) =>
+        snapshot.mode === "client" &&
+        Boolean(snapshot.publicUdpAddr ?? snapshot.udpBindAddr) &&
+        ["waitingForPeer", "connecting", "connected"].includes(snapshot.state),
       8000,
     );
     renderStatus(status);
-    addLog(`libp2p dial started for ${server.peerId}.`);
+    await state.realtime.channels.get(`lobby:${server.clientId}`).publish("connect-request", {
+      client_id: localClientId,
+      room_name: server.roomName,
+      peer_addr: status.publicUdpAddr ?? status.udpBindAddr,
+      relay_session_id: relaySessionId,
+    });
+    addLog(t("connectRequestSent", { host: server.clientId }));
   } catch (error) {
     state.pendingConnects.delete(server.clientId);
     setMinecraftHint(t("hintFailed"), false);
@@ -1092,6 +1146,9 @@ startTestServerEl.addEventListener("click", async () => {
 });
 stopTestServerEl.addEventListener("click", async () => {
   await stopEmbeddedTestServer();
+});
+probeTestServerEl.addEventListener("click", async () => {
+  await probeEmbeddedTestServer();
 });
 connectSelectedEl.addEventListener("click", async () => {
   const selected = getSelectedServer();
