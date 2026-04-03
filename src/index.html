@@ -170,6 +170,11 @@
                 <div id="minecraft-target-hint" class="minecraft-hint" data-i18n="hintWaiting">
                   Ожидание туннеля...
                 </div>
+                <div class="selected-actions" style="margin-top: 16px;">
+                  <button id="run-preflight" class="secondary-button" type="button">Run Preflight</button>
+                  <button id="start-test-server" class="secondary-button" type="button">Start Test Server</button>
+                  <button id="stop-test-server" class="secondary-button" type="button">Stop Test Server</button>
+                </div>
               </section>
 
               <section class="panel log-panel">
@@ -181,6 +186,9 @@
                   <button id="copy-logs" class="secondary-button" type="button" data-i18n="copyLogButton">
                     Копировать лог
                   </button>
+                </div>
+                <div class="selected-actions" style="margin-bottom: 14px;">
+                  <button id="copy-diagnostics" class="secondary-button" type="button">Copy Diagnostics JSON</button>
                 </div>
                 <div id="logs" class="log-list"></div>
               </section>

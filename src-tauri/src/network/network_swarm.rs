@@ -24,7 +24,10 @@ use tokio::{
 };
 use tokio_util::{compat::FuturesAsyncReadCompatExt, sync::CancellationToken};
 
-use crate::models::{ConnectionState, NetworkStatus, PeerInfo, SessionMode, SwarmBootstrap};
+use crate::models::{
+    ConnectionState, LocalTargetState, NetworkStatus, PeerInfo, SessionMode, SwarmBootstrap,
+    TransportKind,
+};
 
 use super::{
     minecraft::detect_local_version,
@@ -168,6 +171,10 @@ impl NetworkSwarmManager {
         self.status.read().await.clone()
     }
 
+    pub fn shared_status(&self) -> Arc<RwLock<NetworkStatus>> {
+        self.status.clone()
+    }
+
     pub async fn start_hosting(
         &self,
         app: AppHandle,
@@ -195,9 +202,20 @@ impl NetworkSwarmManager {
             status.room_code = Some(room_name.clone());
             status.local_game_port = Some(local_port);
             status.minecraft_version = minecraft_version.clone();
+            status.local_target_state = if local_target_ready {
+                LocalTargetState::Reachable
+            } else {
+                LocalTargetState::Unreachable
+            };
             status.password_protected = password_protected;
-            status.note = Some("Р—Р°РїСѓСЃРєР°РµРј libp2p swarm Рё СЂРµР·РµСЂРІРёСЂСѓРµРј relay РїСЂРё РЅРµРѕР±С…РѕРґРёРјРѕСЃС‚Рё.".into());
-            push_log(&mut status, format!("РЎС‚Р°СЂС‚ С…РѕСЃС‚Р° \"{room_name}\" С‡РµСЂРµР· rust-libp2p."));
+            status.note = Some(
+                "Запускаем сетевую сессию, проверяем локальный Minecraft и подготавливаем direct/fallback транспорт."
+                    .into(),
+            );
+            push_log(
+                &mut status,
+                format!("Старт хоста \"{room_name}\" через networking core нового поколения."),
+            );
             if !local_target_ready {
                 push_log(
                     &mut status,
@@ -237,7 +255,7 @@ impl NetworkSwarmManager {
 
         let mut status = self.status.write().await;
         *status = default_status();
-        push_log(&mut status, "libp2p-СЃРµСЃСЃРёСЏ РѕСЃС‚Р°РЅРѕРІР»РµРЅР°.");
+        push_log(&mut status, "Сетевая сессия остановлена.");
         Ok(())
     }
 
@@ -268,8 +286,8 @@ impl NetworkSwarmManager {
                 status.mode = SessionMode::Client;
                 status.state = ConnectionState::Starting;
                 status.local_game_port = Some(25565);
-                status.note = Some("Р—Р°РїСѓСЃРєР°РµРј РєР»РёРµРЅС‚СЃРєРёР№ libp2p swarm.".into());
-                push_log(&mut status, "РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ РєР»РёРµРЅС‚СЃРєРѕРіРѕ swarm РґР»СЏ dial + DCUtR.");
+                status.note = Some("Запускаем клиентскую сетевую сессию и выбираем лучший транспорт.".into());
+                push_log(&mut status, "Инициализация клиентского networking core.");
             }
 
             let (runtime, _) = spawn_swarm_runtime(
@@ -310,12 +328,13 @@ impl NetworkSwarmManager {
             let mut status = self.status.write().await;
             status.mode = SessionMode::Client;
             status.state = ConnectionState::Connecting;
+            status.transport_kind = TransportKind::Unknown;
             status.transport_path = None;
-            status.note = Some("РЈСЃС‚Р°РЅР°РІР»РёРІР°РµРј libp2p-СЃРѕРµРґРёРЅРµРЅРёРµ СЃ peer С‡РµСЂРµР· direct dial / relay.".into());
+            status.note = Some("Поднимаем соединение с peer и пытаемся выбрать самый быстрый рабочий путь.".into());
             push_log(
                 &mut status,
                 format!(
-                    "Dial peer {} РїРѕ {} Р°РґСЂРµСЃ(Р°Рј) С‡РµСЂРµР· Swarm.",
+                    "Подключение к peer {} по {} адресу(ам).",
                     peer_id,
                     addrs.len()
                 ),
@@ -329,6 +348,7 @@ impl NetworkSwarmManager {
 
             let mut status = self.status.write().await;
             status.state = ConnectionState::Connected;
+            status.transport_kind = TransportKind::ReverseTunnel;
             status.transport_path = Some("reverse-tunnel".into());
             status.note = Some(format!(
                 "Reverse tunnel активирован. Подключайтесь в Minecraft к {}.",
@@ -396,7 +416,7 @@ async fn spawn_swarm_runtime(
         push_log(
             &mut status_guard,
             format!(
-                "РџРµСЂРµРјРµРЅРЅР°СЏ {} РїСѓСЃС‚Р°. Relay fallback Р±СѓРґРµС‚ РґРѕСЃС‚СѓРїРµРЅ С‚РѕР»СЊРєРѕ РїРѕСЃР»Рµ РєРѕРЅС„РёРіСѓСЂР°С†РёРё bootstrap-СѓР·Р»РѕРІ.",
+                "Переменная {} пуста. Relay fallback будет доступен только после конфигурации bootstrap-узлов.",
                 RELAY_BOOTSTRAPS_ENV
             ),
         );
@@ -665,7 +685,7 @@ async fn run_swarm_actor(
                             reverse_tunnel_handle = Some(handle);
                         }
                         Err(error) => {
-                            log_status(&status, format!("Reverse tunnel fallback РЅРµ РїРѕРґРЅСЏР»СЃСЏ: {error:#}")).await;
+                            log_status(&status, format!("Reverse tunnel fallback не поднялся: {error:#}")).await;
                         }
                     }
                 }
@@ -1031,7 +1051,7 @@ async fn start_host_reverse_tunnel(
 ) -> Result<ReverseTunnelHandle> {
     let local_port = config
         .host_local_port
-        .context("reverse tunnel fallback РґРѕСЃС‚СѓРїРµРЅ С‚РѕР»СЊРєРѕ РІ host mode")?;
+        .context("reverse tunnel fallback доступен только в host mode")?;
     if let Err(error) = verify_local_minecraft_target(local_port).await {
         let mut status_guard = status.write().await;
         status_guard.last_error = Some(error.to_string());

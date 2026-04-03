@@ -6,6 +6,8 @@ use tokio::{
     time::{timeout, Duration},
 };
 
+use crate::models::{LocalTargetState, PreflightReport};
+
 const STATUS_PROTOCOL_CANDIDATES: &[i32] = &[767, 764, 760, 47];
 
 #[derive(Debug, Deserialize)]
@@ -28,6 +30,46 @@ pub async fn detect_local_version(port: u16) -> Result<String> {
     }
 
     Err(last_error.unwrap_or_else(|| anyhow!("не удалось получить ответ status ping")))
+}
+
+pub async fn build_preflight_report(port: u16) -> PreflightReport {
+    match detect_local_version(port).await {
+        Ok(version) => PreflightReport {
+            local_port: port,
+            reachable: true,
+            state: LocalTargetState::Reachable,
+            minecraft_version: Some(version),
+            recommended_host_action:
+                "Локальный Minecraft отвечает. Можно запускать хост и публиковать комнату.".into(),
+            note: Some(
+                "Мир уже открыт в LAN или локальный сервер принимает подключения.".into(),
+            ),
+        },
+        Err(version_error) => match probe_local_tcp(port).await {
+            Ok(()) => PreflightReport {
+                local_port: port,
+                reachable: true,
+                state: LocalTargetState::Reachable,
+                minecraft_version: None,
+                recommended_host_action:
+                    "TCP-порт доступен, но версия не определилась. Хост можно запускать, но стоит проверить совместимость клиента.".into(),
+                note: Some(format!(
+                    "Status ping не смог определить версию: {version_error:#}"
+                )),
+            },
+            Err(reachability_error) => PreflightReport {
+                local_port: port,
+                reachable: false,
+                state: LocalTargetState::Unreachable,
+                minecraft_version: None,
+                recommended_host_action:
+                    "Сначала откройте мир в LAN или запустите локальный Minecraft сервер, затем повторите запуск хоста.".into(),
+                note: Some(format!(
+                    "Локальный TCP check не прошёл: {reachability_error:#}; status ping: {version_error:#}"
+                )),
+            },
+        },
+    }
 }
 
 async fn query_status(port: u16, protocol_version: i32) -> Result<String> {
@@ -59,6 +101,19 @@ async fn query_status(port: u16, protocol_version: i32) -> Result<String> {
     let response: StatusResponse =
         serde_json::from_slice(&payload).context("не удалось распарсить JSON status ping")?;
     Ok(response.version.name)
+}
+
+async fn probe_local_tcp(port: u16) -> Result<()> {
+    let target = format!("127.0.0.1:{port}");
+    let stream = timeout(Duration::from_secs(2), TcpStream::connect(&target))
+        .await
+        .context("таймаут при TCP-проверке локального Minecraft")?
+        .with_context(|| format!("не удалось подключиться к {target}"))?;
+    stream
+        .writable()
+        .await
+        .with_context(|| format!("локальный Minecraft на {target} не стал writable"))?;
+    Ok(())
 }
 
 fn build_handshake_packet(host: &str, port: u16, protocol_version: i32) -> Result<Vec<u8>> {

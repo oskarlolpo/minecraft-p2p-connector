@@ -25,8 +25,12 @@ const hostButtonEl = document.querySelector("#host-button");
 const stopButtonEl = document.querySelector("#stop-button");
 const refreshLobbyEl = document.querySelector("#refresh-lobby");
 const copyLogsEl = document.querySelector("#copy-logs");
+const copyDiagnosticsEl = document.querySelector("#copy-diagnostics");
 const copySelectedEndpointEl = document.querySelector("#copy-selected-endpoint");
 const connectSelectedEl = document.querySelector("#connect-selected");
+const runPreflightEl = document.querySelector("#run-preflight");
+const startTestServerEl = document.querySelector("#start-test-server");
+const stopTestServerEl = document.querySelector("#stop-test-server");
 const serverListEl = document.querySelector("#server-list");
 const logsEl = document.querySelector("#logs");
 const peerListEl = document.querySelector("#peer-list");
@@ -78,6 +82,8 @@ const state = {
   pendingKicks: new Set(),
   tunnelReady: false,
   activeTunnelTransport: null,
+  lastPreflight: null,
+  testServerInfo: null,
   page: "home",
   preferences: loadPreferences(),
 };
@@ -745,6 +751,56 @@ async function waitForStatus(predicate, timeoutMs = 6000) {
   throw new Error("Timed out while waiting for backend status.");
 }
 
+async function runPreflightCheck({ silent = false } = {}) {
+  const localPort = Number(localGamePortEl.value || 25565);
+  const report = await invoke("run_preflight_and_store", { localPort });
+  state.lastPreflight = report;
+
+  if (!silent) {
+    addLog(
+      `Preflight ${report.reachable ? "OK" : "FAIL"} для 127.0.0.1:${report.localPort}. ${
+        report.minecraftVersion ? `Версия: ${report.minecraftVersion}.` : "Версия не определилась."
+      }`,
+    );
+    addLog(report.recommendedHostAction);
+    if (report.note) addLog(report.note);
+  }
+
+  return report;
+}
+
+async function startEmbeddedTestServer() {
+  const port = Number(localGamePortEl.value || 25565);
+  try {
+    const info = await invoke("start_test_server", { port });
+    state.testServerInfo = info;
+    addLog(`Тестовый сервер запущен на ${info.bindAddr}. Протокол: ${info.protocol}.`);
+  } catch (error) {
+    addLog(`Не удалось запустить тестовый сервер: ${String(error)}`);
+  }
+}
+
+async function stopEmbeddedTestServer() {
+  try {
+    await invoke("stop_test_server");
+    state.testServerInfo = null;
+    addLog("Тестовый сервер остановлен.");
+  } catch (error) {
+    addLog(`Не удалось остановить тестовый сервер: ${String(error)}`);
+  }
+}
+
+async function copyDiagnosticsSnapshot() {
+  try {
+    const localPort = Number(localGamePortEl.value || 25565);
+    const snapshot = await invoke("export_diagnostics_snapshot", { localPort });
+    await navigator.clipboard.writeText(JSON.stringify(snapshot, null, 2));
+    addLog("Полная диагностика скопирована в буфер обмена.");
+  } catch (error) {
+    addLog(`Не удалось выгрузить диагностику: ${String(error)}`);
+  }
+}
+
 async function startHosting() {
   if (!canOpenHostModal()) return;
   const roomName = roomNameEl.value.trim();
@@ -760,6 +816,12 @@ async function startHosting() {
   setMinecraftHint(t("hintWaiting"), false);
 
   try {
+    const preflight = await runPreflightCheck({ silent: false });
+    if (!preflight.reachable) {
+      addLog("Хост не запущен: локальный Minecraft недоступен. Сначала откройте мир в LAN или запустите тестовый сервер.");
+      return;
+    }
+
     const bootstrap = await invoke("start_hosting", { roomName, password, localPort });
     const status = await waitForStatus(
       (snapshot) => snapshot.mode === "host" && ["waitingForPeer", "hosting", "connected", "error"].includes(snapshot.state),
@@ -970,6 +1032,15 @@ await listen("reverse_tunnel_ready", async (event) => {
   await refreshLobby();
 });
 
+await listen("test_server_started", async (event) => {
+  state.testServerInfo = event.payload ?? null;
+  addLog(`Тестовый сервер готов: ${event.payload?.bindAddr ?? "n/a"} (${event.payload?.protocol ?? "unknown"}).`);
+});
+
+await listen("test_server_client_closed", async (event) => {
+  addLog(`Тестовый сервер: клиент ${event.payload ?? "unknown"} завершил соединение.`);
+});
+
 await listen("relay_active", async (event) => {
   addLog(`Relay active: ${event.payload?.relayAddr ?? "n/a"}`);
 });
@@ -1004,11 +1075,23 @@ copyLogsEl.addEventListener("click", async () => {
   await navigator.clipboard.writeText(currentLogLines().join("\n"));
   addLog(t("copiedLog"));
 });
+copyDiagnosticsEl.addEventListener("click", async () => {
+  await copyDiagnosticsSnapshot();
+});
 copySelectedEndpointEl.addEventListener("click", async () => {
   const selected = getSelectedServer();
   if (!selected?.peerAddr) return;
   await navigator.clipboard.writeText(selected.peerAddr);
   addLog(t("copiedIp"));
+});
+runPreflightEl.addEventListener("click", async () => {
+  await runPreflightCheck();
+});
+startTestServerEl.addEventListener("click", async () => {
+  await startEmbeddedTestServer();
+});
+stopTestServerEl.addEventListener("click", async () => {
+  await stopEmbeddedTestServer();
 });
 connectSelectedEl.addEventListener("click", async () => {
   const selected = getSelectedServer();
