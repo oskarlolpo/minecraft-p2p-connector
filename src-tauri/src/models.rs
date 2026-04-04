@@ -60,6 +60,7 @@ pub struct SwarmBootstrap {
     pub relay_addrs: Vec<String>,
     pub nat_status: String,
     pub local_game_port: Option<u16>,
+    pub transport_preference: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +76,9 @@ pub struct NetworkStatus {
     pub transport_kind: TransportKind,
     pub local_target_state: LocalTargetState,
     pub transport_path: Option<String>,
+    pub transport_preference: Option<String>,
+    pub cloudflare_enabled: bool,
+    pub cloudflare_turn_endpoint: Option<String>,
     pub password_protected: bool,
     pub peer_count: usize,
     pub peers: Vec<PeerInfo>,
@@ -97,6 +101,9 @@ impl Default for NetworkStatus {
             transport_kind: TransportKind::Unknown,
             local_target_state: LocalTargetState::Unknown,
             transport_path: None,
+            transport_preference: None,
+            cloudflare_enabled: false,
+            cloudflare_turn_endpoint: None,
             password_protected: false,
             peer_count: 0,
             peers: Vec::new(),

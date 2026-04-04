@@ -20,6 +20,7 @@ use crate::{
 };
 
 use super::{
+    cloudflare::CloudflareConfig,
     minecraft, proxy,
     relay::{self, RelayConfig},
 };
@@ -41,6 +42,7 @@ struct Inner {
     status: Arc<RwLock<NetworkStatus>>,
     stun: SignalingConfig,
     relay: RelayConfig,
+    cloudflare: CloudflareConfig,
 }
 
 struct SessionRuntime {
@@ -59,6 +61,7 @@ struct HostControl {
     room_name: String,
     peer_id: String,
     local_game_port: u16,
+    use_cloudflare: bool,
     expected_peers: Arc<RwLock<HashMap<SocketAddr, String>>>,
     live_connections: Arc<Mutex<HashMap<String, Connection>>>,
     relay_sessions: Arc<Mutex<HashMap<String, HostRelayRuntime>>>,
@@ -106,6 +109,7 @@ impl NetworkManager {
                 status: Arc::new(RwLock::new(status)),
                 stun,
                 relay,
+                cloudflare: CloudflareConfig::from_env(),
             }),
         }
     }
@@ -124,6 +128,7 @@ impl NetworkManager {
         room_name: String,
         password: Option<String>,
         local_port: u16,
+        use_cloudflare: bool,
     ) -> Result<String> {
         let room_name = room_name.trim().to_string();
         if room_name.is_empty() {
@@ -137,7 +142,7 @@ impl NetworkManager {
         self.reset_session().await;
 
         match self
-            .start_hosting_inner(room_name, password, local_port)
+            .start_hosting_inner(room_name, password, local_port, use_cloudflare)
             .await
         {
             Ok(peer_addr) => Ok(peer_addr),
@@ -223,6 +228,7 @@ impl NetworkManager {
         room_name: String,
         password: Option<String>,
         local_port: u16,
+        use_cloudflare: bool,
     ) -> Result<String> {
         let peer_id = Uuid::new_v4().to_string();
         let expected_peers = Arc::new(RwLock::new(HashMap::<SocketAddr, String>::new()));
@@ -235,6 +241,9 @@ impl NetworkManager {
             state: ConnectionState::Starting,
             room_code: Some(room_name.clone()),
             local_game_port: Some(local_port),
+            transport_preference: Some(if use_cloudflare { "cloudflare" } else { "direct" }.into()),
+            cloudflare_enabled: use_cloudflare,
+            cloudflare_turn_endpoint: self.inner.cloudflare.first_turn_endpoint(),
             password_protected: has_password,
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             note: Some("Поднимаю host endpoint и запрашиваю локальную версию Minecraft.".into()),
@@ -273,6 +282,9 @@ impl NetworkManager {
             public_udp_addr: Some(public_udp_addr.to_string()),
             local_game_port: Some(local_port),
             minecraft_version: minecraft_version.clone(),
+            transport_preference: Some(if use_cloudflare { "cloudflare" } else { "direct" }.into()),
+            cloudflare_enabled: use_cloudflare,
+            cloudflare_turn_endpoint: self.inner.cloudflare.first_turn_endpoint(),
             password_protected: has_password,
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             note: Some(format!(
@@ -285,10 +297,27 @@ impl NetworkManager {
                 format!("Публичный UDP адрес: {public_udp_addr}"),
                 format!("Локальный bind: {udp_bind_addr}"),
                 format!("Host forwards to {}", proxy::minecraft_local_addr(local_port)),
+                if use_cloudflare {
+                    if let Some(endpoint) = self.inner.cloudflare.first_turn_endpoint() {
+                        format!("Cloudflare fallback requested. TURN endpoint: {endpoint}")
+                    } else {
+                        "Cloudflare fallback requested. TURN endpoint is not configured.".into()
+                    }
+                } else {
+                    "Cloudflare fallback is disabled for this host.".into()
+                },
             ],
             ..Default::default()
         })
         .await;
+
+        if use_cloudflare && !self.inner.cloudflare.runtime_available() {
+            self.push_log(
+                "Cloudflare mode выбран, но MC_CF_TURN_CREDENTIAL_ENDPOINT не задан. Пока будет использован текущий direct path и существующий fallback."
+                    .into(),
+            )
+            .await;
+        }
 
         let cancel = CancellationToken::new();
         let accept_task = self.spawn_host_accept_loop(
@@ -308,6 +337,7 @@ impl NetworkManager {
                 room_name,
                 peer_id,
                 local_game_port: local_port,
+                use_cloudflare,
                 expected_peers,
                 live_connections,
                 relay_sessions,
@@ -337,6 +367,7 @@ impl NetworkManager {
         let room_name = host.room_name.clone();
         let peer_id = host.peer_id.clone();
         let local_game_port = host.local_game_port;
+        let use_cloudflare = host.use_cloudflare;
         let expected_peers = host.expected_peers.clone();
         let relay_sessions = host.relay_sessions.clone();
         drop(session);
@@ -351,7 +382,12 @@ impl NetworkManager {
         self.mutate_status(|status| {
             status.state = ConnectionState::Punching;
             status.note = Some(format!(
-                "Пробиваю UDP до клиента {display_peer}. Игра слушается на 127.0.0.1:{local_game_port}."
+                "Пробиваю UDP до клиента {display_peer}. Игра слушается на 127.0.0.1:{local_game_port}. {}",
+                if use_cloudflare {
+                    "Cloudflare fallback profile включён для этой комнаты."
+                } else {
+                    "Используется стандартный direct профиль."
+                }
             ));
         })
         .await;
@@ -447,6 +483,7 @@ impl NetworkManager {
         self.overwrite_status(NetworkStatus {
             mode: SessionMode::Client,
             state: ConnectionState::Starting,
+            transport_preference: Some("direct".into()),
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             note: Some("Подготавливаю клиентский endpoint и вычисляю внешний UDP адрес.".into()),
             logs: vec![format!("Client target: {peer_addr}")],
@@ -471,6 +508,7 @@ impl NetworkManager {
             state: ConnectionState::WaitingForPeer,
             udp_bind_addr: Some(udp_bind_addr.to_string()),
             public_udp_addr: Some(public_udp_addr.to_string()),
+            transport_preference: Some("direct".into()),
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             note: Some("Клиент готов. Отправляю handshake и жду ответ от хоста.".into()),
             peers: vec![PeerInfo {
@@ -837,6 +875,7 @@ impl NetworkManager {
         self.mutate_status(|status| {
             status.state = ConnectionState::Connecting;
             status.transport_path = Some("ably-relay".into());
+            status.transport_preference.get_or_insert_with(|| "direct".into());
             status.note = Some(
                 "Прямой QUIC не поднялся. Перехожу на резервный relay-маршрут через Ably MQTT."
                     .into(),

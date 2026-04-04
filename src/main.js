@@ -17,6 +17,7 @@ const openHostModalEl = document.querySelector("#open-host-modal");
 const closeModalEl = document.querySelector("#close-modal");
 const closeModalSecondaryEl = document.querySelector("#close-modal-secondary");
 const requirePasswordEl = document.querySelector("#require-password");
+const useCloudflareEl = document.querySelector("#use-cloudflare");
 const passwordFieldGroupEl = document.querySelector("#password-field-group");
 const roomNameEl = document.querySelector("#room-name");
 const roomPasswordEl = document.querySelector("#room-password");
@@ -68,6 +69,7 @@ const hostSession = {
   minecraftVersion: null,
   presencePayload: null,
   presenceEntered: false,
+  useCloudflare: false,
 };
 
 const localClientId = ensureClientId();
@@ -332,7 +334,7 @@ function renderSelectedServer() {
         host: `${selected.hostName}${selected.clientId === localClientId ? " (you)" : ""} · ${selected.peerId}`,
         version: selected.minecraftVersion ?? t("serverUnknownVersion"),
         slots: selected.slots,
-        password: selected.hasPassword ? t("selectedMetaPassword") : "",
+        password: `${selected.hasPassword ? t("selectedMetaPassword") : ""}${selected.cloudflareEnabled ? " · Cloudflare" : ""}`,
       })
     : t("selectedMetaEmpty");
 }
@@ -486,7 +488,7 @@ function renderServers() {
           <div class="server-main">
             <div class="server-main-top">
               <strong>${escapeHtml(server.roomName)}</strong>
-              <span class="row-chip">${server.hasPassword ? "🔒" : "⚔"}</span>
+              <span class="row-chip">${server.cloudflareEnabled ? "☁" : server.hasPassword ? "🔒" : "⚔"}</span>
             </div>
             <span>${escapeHtml(server.hostName)}${isLocal ? ` · ${escapeHtml(t("selfHostLabel"))}` : ""}</span>
           </div>
@@ -534,6 +536,9 @@ function hydrateServers(members) {
         localPort: data.local_port ?? 25565,
         minecraftVersion: data.minecraft_version ?? null,
         transport: data.transport ?? null,
+        transportPreference: data.transport_preference ?? "direct",
+        cloudflareEnabled: Boolean(data.cloudflare_enabled),
+        cloudflareTurnEndpoint: data.cloudflare_turn_endpoint ?? null,
       };
     })
     .filter((server) => Boolean(server.peerId) && (server.peerAddrs.length > 0 || Boolean(server.peerAddr)));
@@ -561,6 +566,9 @@ function buildPresencePayload(status) {
     local_port: hostSession.localPort,
     minecraft_version: hostSession.minecraftVersion ?? status?.minecraftVersion ?? null,
     transport: status?.transportPath ?? state.activeTunnelTransport ?? null,
+    transport_preference: hostSession.useCloudflare ? "cloudflare" : "direct",
+    cloudflare_enabled: hostSession.useCloudflare,
+    cloudflare_turn_endpoint: status?.cloudflareTurnEndpoint ?? null,
   };
 }
 
@@ -569,6 +577,7 @@ function syncHostSessionFromStatus(status) {
     hostSession.active = true;
     hostSession.roomName = status.roomCode ?? hostSession.roomName;
     hostSession.hasPassword = Boolean(status.passwordProtected);
+    hostSession.useCloudflare = Boolean(status.cloudflareEnabled ?? hostSession.useCloudflare);
     hostSession.peerAddr =
       advertisedEndpoint(hostSession.listenAddrs, status.publicUdpAddr ?? status.udpBindAddr) ?? hostSession.peerAddr;
     hostSession.localPort = status.localGamePort ?? hostSession.localPort;
@@ -581,6 +590,7 @@ function syncHostSessionFromStatus(status) {
   hostSession.peerAddr = null;
   hostSession.minecraftVersion = null;
   hostSession.presenceEntered = false;
+  hostSession.useCloudflare = false;
 }
 
 function updateHintFromStatus(status) {
@@ -854,6 +864,7 @@ async function startHosting() {
 
   const localPort = Number(localGamePortEl.value || 25565);
   const password = requirePasswordEl.checked ? roomPasswordEl.value.trim() || null : null;
+  const useCloudflare = Boolean(useCloudflareEl.checked);
   hostButtonEl.disabled = true;
   state.tunnelReady = false;
   setMinecraftHint(t("hintWaiting"), false);
@@ -865,7 +876,7 @@ async function startHosting() {
       return;
     }
 
-    const bootstrap = await invoke("start_hosting", { roomName, password, localPort });
+    const bootstrap = await invoke("start_hosting", { roomName, password, localPort, useCloudflare });
     const status = await waitForStatus(
       (snapshot) => snapshot.mode === "host" && ["waitingForPeer", "hosting", "connected", "error"].includes(snapshot.state),
       22000,
@@ -879,6 +890,7 @@ async function startHosting() {
     hostSession.peerAddr = advertisedEndpoint(hostSession.listenAddrs, status.publicUdpAddr ?? status.udpBindAddr);
     hostSession.localPort = localPort;
     hostSession.minecraftVersion = status.minecraftVersion ?? null;
+    hostSession.useCloudflare = useCloudflare;
     hostSession.presencePayload = null;
     hostSession.presenceEntered = false;
     if (canAdvertiseHost()) {
@@ -917,6 +929,7 @@ async function stopSession() {
     hostSession.peerAddr = null;
     hostSession.localPort = 25565;
     hostSession.minecraftVersion = null;
+    hostSession.useCloudflare = false;
     hostSession.presencePayload = null;
     hostSession.presenceEntered = false;
     state.selectedServerId = null;
@@ -958,7 +971,12 @@ async function connectToServer(server) {
 
   try {
     addLog(t("connectProgress", { room: server.roomName, addr: server.peerAddr }));
-    const relaySessionId = `relay-${crypto.randomUUID()}`;
+    if (server.cloudflareEnabled) {
+      addLog(
+        `Хост ${server.roomName} помечен как Cloudflare-preferred. Сначала пробуем direct path, затем текущий fallback.`,
+      );
+    }
+    const relaySessionId = `${server.cloudflareEnabled ? "cfrelay" : "relay"}-${crypto.randomUUID()}`;
     const peerAddrs = sortAdvertisedAddrs(
       [...new Set([...(server.peerAddrs ?? []), normalizeToMultiaddr(server.peerAddr)].filter(Boolean))],
     );

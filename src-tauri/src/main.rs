@@ -30,10 +30,11 @@ async fn start_hosting(
     room_name: String,
     password: Option<String>,
     local_port: u16,
+    use_cloudflare: bool,
 ) -> Result<SwarmBootstrap, String> {
     let public_addr = state
         .manager
-        .start_hosting(app, room_name, password, local_port)
+        .start_hosting(app, room_name, password, local_port, use_cloudflare)
         .await
         .map_err(|error| format!("{error:#}"))?;
 
@@ -41,8 +42,17 @@ async fn start_hosting(
         peer_id: String::new(),
         listen_addrs: vec![normalize_socket_addr_to_multiaddr(&public_addr)],
         relay_addrs: Vec::new(),
-        nat_status: "quic-direct".into(),
+        nat_status: if use_cloudflare {
+            "quic-direct+cloudflare-preferred".into()
+        } else {
+            "quic-direct".into()
+        },
         local_game_port: Some(local_port),
+        transport_preference: Some(if use_cloudflare {
+            "cloudflare".into()
+        } else {
+            "direct".into()
+        }),
     })
 }
 
