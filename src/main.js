@@ -1,6 +1,7 @@
 import * as Ably from "ably";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { I18N } from "./i18n.js";
 
@@ -11,6 +12,7 @@ const SAFE_RELEASE_STATES = new Set(["initialized", "detached", "failed"]);
 const SAFE_SKIP_STATES = new Set(["detached", "failed", "suspended"]);
 const SETTINGS_THEME_KEY = "minecraft-p2p-theme";
 const SETTINGS_LANGUAGE_KEY = "minecraft-p2p-language";
+const SETTINGS_PROFILE_KEY = "minecraft-p2p-profile";
 
 const modalEl = document.querySelector("#host-modal");
 const openHostModalEl = document.querySelector("#open-host-modal");
@@ -27,6 +29,11 @@ const stopButtonEl = document.querySelector("#stop-button");
 const refreshLobbyEl = document.querySelector("#refresh-lobby");
 const copyLogsEl = document.querySelector("#copy-logs");
 const copyDiagnosticsEl = document.querySelector("#copy-diagnostics");
+const yggstackStatusEl = document.querySelector("#yggstack-status");
+const prepareYggstackEl = document.querySelector("#prepare-yggstack");
+const startYggstackEl = document.querySelector("#start-yggstack");
+const retryYggstackEl = document.querySelector("#retry-yggstack");
+const stopYggstackEl = document.querySelector("#stop-yggstack");
 const copySelectedEndpointEl = document.querySelector("#copy-selected-endpoint");
 const connectSelectedEl = document.querySelector("#connect-selected");
 const runPreflightEl = document.querySelector("#run-preflight");
@@ -57,6 +64,30 @@ const navSettingsEl = document.querySelector("#nav-settings");
 const pageHomeEl = document.querySelector("#page-home");
 const pageSettingsEl = document.querySelector("#page-settings");
 const portHelpEl = document.querySelector("#port-help");
+const hideOverlayButtonEl = document.querySelector("#hide-overlay-button");
+const openProfileModalEl = document.querySelector("#open-profile-modal");
+const overlayShortcutChipEl = document.querySelector("#overlay-shortcut-chip");
+const overlayStatusLineEl = document.querySelector("#overlay-status-line");
+const topbarProfileAvatarEl = document.querySelector("#topbar-profile-avatar");
+const topbarProfileNameEl = document.querySelector("#topbar-profile-name");
+const settingsNicknameEl = document.querySelector("#settings-nickname");
+const settingsAvatarInputEl = document.querySelector("#settings-avatar-input");
+const settingsAvatarPreviewEl = document.querySelector("#settings-avatar-preview");
+const settingsProfileNameEl = document.querySelector("#settings-profile-name");
+const settingsProfileSubtitleEl = document.querySelector("#settings-profile-subtitle");
+const settingsShortcutInputEl = document.querySelector("#settings-shortcut-input");
+const saveProfileButtonEl = document.querySelector("#save-profile-button");
+const clearAvatarButtonEl = document.querySelector("#clear-avatar-button");
+const profileModalEl = document.querySelector("#profile-modal");
+const closeProfileModalEl = document.querySelector("#close-profile-modal");
+const closeProfileModalSecondaryEl = document.querySelector("#close-profile-modal-secondary");
+const saveProfileModalEl = document.querySelector("#save-profile-modal");
+const profileNicknameInputEl = document.querySelector("#profile-nickname-input");
+const profileAvatarInputEl = document.querySelector("#profile-avatar-input");
+const profileShortcutInputEl = document.querySelector("#profile-shortcut-input");
+const profileAvatarPreviewEl = document.querySelector("#profile-avatar-preview");
+
+const appWindow = getCurrentWindow();
 
 const hostSession = {
   active: false,
@@ -70,6 +101,10 @@ const hostSession = {
   presencePayload: null,
   presenceEntered: false,
   useCloudflare: false,
+  yggEnabled: false,
+  yggAddress: null,
+  yggPublicKey: null,
+  yggSubnet: null,
 };
 
 const localClientId = ensureClientId();
@@ -84,10 +119,12 @@ const state = {
   syncingPresence: false,
   pendingConnects: new Set(),
   pendingKicks: new Set(),
+  pendingTransportFlow: null,
   tunnelReady: false,
   activeTunnelTransport: null,
   lastPreflight: null,
   testServerInfo: null,
+  yggstackInfo: null,
   page: "home",
   preferences: loadPreferences(),
 };
@@ -102,10 +139,24 @@ function ensureClientId() {
 }
 
 function loadPreferences() {
+  const storedProfile = safeParseJson(localStorage.getItem(SETTINGS_PROFILE_KEY));
   return {
     theme: localStorage.getItem(SETTINGS_THEME_KEY) || "oled",
     language: localStorage.getItem(SETTINGS_LANGUAGE_KEY) || "ru",
+    profile: {
+      nickname: storedProfile?.nickname || "",
+      avatarDataUrl: storedProfile?.avatarDataUrl || null,
+      overlayShortcut: storedProfile?.overlayShortcut || "SHIFT+TAB",
+    },
   };
+}
+
+function safeParseJson(value) {
+  try {
+    return value ? JSON.parse(value) : null;
+  } catch {
+    return null;
+  }
 }
 
 function savePreference(key, value) {
@@ -125,6 +176,226 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function saveProfile() {
+  localStorage.setItem(
+    SETTINGS_PROFILE_KEY,
+    JSON.stringify(state.preferences.profile),
+  );
+}
+
+function currentNickname() {
+  return state.preferences.profile.nickname?.trim() || localClientId;
+}
+
+function normalizedShortcut(value) {
+  return String(value || "SHIFT+TAB")
+    .trim()
+    .replace(/\s+/g, "")
+    .replaceAll("+", "+")
+    .toUpperCase();
+}
+
+function avatarMarkup(label = currentNickname(), avatarDataUrl = state.preferences.profile.avatarDataUrl) {
+  if (avatarDataUrl) {
+    return `<img class="host-avatar-image" src="${avatarDataUrl}" alt="${escapeHtml(label)}" />`;
+  }
+  const initials = String(label || "MC")
+    .replace(/§.|&./g, "")
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("") || "MC";
+  return `<span>${escapeHtml(initials)}</span>`;
+}
+
+const MINECRAFT_COLOR_MAP = {
+  0: "#000000",
+  1: "#0000aa",
+  2: "#00aa00",
+  3: "#00aaaa",
+  4: "#aa0000",
+  5: "#aa00aa",
+  6: "#ffaa00",
+  7: "#aaaaaa",
+  8: "#555555",
+  9: "#5555ff",
+  a: "#55ff55",
+  b: "#55ffff",
+  c: "#ff5555",
+  d: "#ff55ff",
+  e: "#ffff55",
+  f: "#ffffff",
+};
+
+function renderMinecraftFormattedText(raw) {
+  const value = String(raw ?? "");
+  const fragments = [];
+  let style = { color: null, bold: false, italic: false, underline: false, strike: false };
+  let buffer = "";
+
+  function flush() {
+    if (!buffer) return;
+    const rules = [];
+    if (style.color) rules.push(`color:${style.color}`);
+    if (style.bold) rules.push("font-weight:800");
+    if (style.italic) rules.push("font-style:italic");
+    if (style.underline || style.strike) {
+      rules.push(
+        `text-decoration:${[style.underline ? "underline" : null, style.strike ? "line-through" : null]
+          .filter(Boolean)
+          .join(" ")}`,
+      );
+    }
+    fragments.push(
+      `<span${rules.length ? ` style="${rules.join(";")}"` : ""}>${escapeHtml(buffer)}</span>`,
+    );
+    buffer = "";
+  }
+
+  for (let index = 0; index < value.length; index += 1) {
+    const symbol = value[index];
+    const next = value[index + 1]?.toLowerCase();
+    if ((symbol === "§" || symbol === "&") && next) {
+      flush();
+      if (MINECRAFT_COLOR_MAP[next]) {
+        style = { color: MINECRAFT_COLOR_MAP[next], bold: false, italic: false, underline: false, strike: false };
+      } else if (next === "l") {
+        style.bold = true;
+      } else if (next === "o") {
+        style.italic = true;
+      } else if (next === "n") {
+        style.underline = true;
+      } else if (next === "m") {
+        style.strike = true;
+      } else if (next === "r") {
+        style = { color: null, bold: false, italic: false, underline: false, strike: false };
+      }
+      index += 1;
+      continue;
+    }
+    buffer += symbol;
+  }
+  flush();
+  return fragments.join("") || escapeHtml(value);
+}
+
+function renderAvatarTarget(element, label = currentNickname(), avatarDataUrl = state.preferences.profile.avatarDataUrl) {
+  if (!element) return;
+  element.innerHTML = avatarMarkup(label, avatarDataUrl);
+}
+
+function syncProfileSurface() {
+  const nickname = currentNickname();
+  const shortcut = normalizedShortcut(state.preferences.profile.overlayShortcut);
+  state.preferences.profile.overlayShortcut = shortcut;
+  if (overlayShortcutChipEl) overlayShortcutChipEl.textContent = shortcut;
+  if (topbarProfileNameEl) topbarProfileNameEl.textContent = nickname;
+  if (settingsProfileNameEl) settingsProfileNameEl.textContent = nickname;
+  if (settingsProfileSubtitleEl) {
+    settingsProfileSubtitleEl.textContent = `Оверлей открывается по ${shortcut}.`;
+  }
+  if (settingsNicknameEl) settingsNicknameEl.value = state.preferences.profile.nickname ?? "";
+  if (settingsShortcutInputEl) settingsShortcutInputEl.value = shortcut;
+  if (profileNicknameInputEl) profileNicknameInputEl.value = state.preferences.profile.nickname ?? "";
+  if (profileShortcutInputEl) profileShortcutInputEl.value = shortcut;
+  renderAvatarTarget(topbarProfileAvatarEl, nickname);
+  renderAvatarTarget(settingsAvatarPreviewEl, nickname);
+  renderAvatarTarget(profileAvatarPreviewEl, nickname);
+}
+
+async function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Не удалось прочитать файл аватара."));
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function buildProfilePayload(nicknameEl, shortcutEl, avatarInputEl) {
+  const nickname = nicknameEl?.value?.trim() || "";
+  const overlayShortcut = normalizedShortcut(shortcutEl?.value || "SHIFT+TAB");
+  let avatarDataUrl = state.preferences.profile.avatarDataUrl ?? null;
+  const file = avatarInputEl?.files?.[0];
+  if (file) {
+    avatarDataUrl = await fileToDataUrl(file);
+  }
+  return {
+    nickname,
+    avatarDataUrl,
+    overlayShortcut,
+    theme: state.preferences.theme,
+    language: state.preferences.language,
+  };
+}
+
+function openProfileModal(required = false) {
+  profileModalEl?.classList.remove("hidden");
+  profileModalEl?.setAttribute("aria-hidden", "false");
+  if (profileModalEl) profileModalEl.dataset.required = required ? "true" : "false";
+  setTimeout(() => profileNicknameInputEl?.focus(), 40);
+}
+
+function closeProfileModal() {
+  if (profileModalEl?.dataset.required === "true" && !state.preferences.profile.nickname?.trim()) {
+    return;
+  }
+  profileModalEl?.classList.add("hidden");
+  profileModalEl?.setAttribute("aria-hidden", "true");
+}
+
+async function persistProfileFromFields(nicknameEl, shortcutEl, avatarInputEl, { closeAfter = false } = {}) {
+  const payload = await buildProfilePayload(nicknameEl, shortcutEl, avatarInputEl);
+  if (!payload.nickname) {
+    nicknameEl?.focus();
+    return;
+  }
+
+  state.preferences.profile.nickname = payload.nickname;
+  state.preferences.profile.avatarDataUrl = payload.avatarDataUrl;
+  state.preferences.profile.overlayShortcut = payload.overlayShortcut;
+  saveProfile();
+
+  await invoke("save_user_profile", {
+    profile: {
+      nickname: payload.nickname,
+      avatarDataUrl: payload.avatarDataUrl,
+      theme: state.preferences.theme,
+      language: state.preferences.language,
+      overlayShortcut: payload.overlayShortcut,
+    },
+  });
+
+  if (settingsAvatarInputEl) settingsAvatarInputEl.value = "";
+  if (profileAvatarInputEl) profileAvatarInputEl.value = "";
+  syncProfileSurface();
+  rerender();
+  addLog(`Профиль сохранён. Overlay shortcut: ${payload.overlayShortcut}.`);
+  if (closeAfter) closeProfileModal();
+}
+
+async function hydrateProfile() {
+  try {
+    const profile = await invoke("get_user_profile");
+    if (profile?.nickname) state.preferences.profile.nickname = profile.nickname;
+    if (profile?.avatarDataUrl) state.preferences.profile.avatarDataUrl = profile.avatarDataUrl;
+    if (profile?.overlayShortcut) state.preferences.profile.overlayShortcut = profile.overlayShortcut;
+    if (profile?.theme) state.preferences.theme = profile.theme;
+    if (profile?.language) state.preferences.language = profile.language;
+  } catch (error) {
+    addLog(`Не удалось загрузить профиль из backend: ${String(error)}`);
+  }
+
+  document.body.dataset.theme = state.preferences.theme;
+  saveProfile();
+  syncProfileSurface();
+
+  if (!state.preferences.profile.nickname?.trim()) {
+    openProfileModal(true);
+  }
 }
 
 function applyTranslations() {
@@ -164,6 +435,7 @@ function applyLanguage(language) {
   state.preferences.language = language;
   savePreference(SETTINGS_LANGUAGE_KEY, language);
   applyTranslations();
+  syncProfileSurface();
   rerender();
 }
 
@@ -251,9 +523,11 @@ function formatMode(mode) {
 }
 
 function formatTransportLabel(transport) {
+  if (transport === "cloudflare-webrtc") return "Cloudflare TURN/WebRTC";
+  if (transport === "ably-relay") return "Ably MQTT relay";
   if (transport === "relay-circuit" || transport === "relay-reservation") return "Circuit Relay v2";
   if (transport === "direct-hole-punch") return "DCUtR hole punch";
-  if (transport === "direct" || transport === "direct-quic") return "Direct libp2p";
+  if (transport === "direct" || transport === "direct-quic") return "Direct QUIC";
   return transport ?? "неизвестный транспорт";
 }
 
@@ -327,7 +601,7 @@ function canAdvertiseHost() {
 
 function renderSelectedServer() {
   const selected = getSelectedServer();
-  selectedServerEl.textContent = selected ? selected.roomName : t("noSelection");
+  selectedServerEl.innerHTML = selected ? renderMinecraftFormattedText(selected.roomName) : escapeHtml(t("noSelection"));
   selectedEndpointEl.textContent = selected?.peerAddr ?? "n/a";
   selectedMetaEl.textContent = selected
     ? t("selectedMetaTemplate", {
@@ -337,6 +611,18 @@ function renderSelectedServer() {
         password: `${selected.hasPassword ? t("selectedMetaPassword") : ""}${selected.cloudflareEnabled ? " · Cloudflare" : ""}`,
       })
     : t("selectedMetaEmpty");
+}
+
+function renderYggstackRuntimeLegacy(info) {
+  state.yggstackInfo = info ?? null;
+  if (!yggstackStatusEl) return;
+  if (!info) {
+    yggstackStatusEl.textContent = "Yggstack: runtime ещё не проверен.";
+    return;
+  }
+
+  const stateLabel = info.running ? "sidecar запущен" : info.ready ? "runtime готов" : "runtime не готов";
+  yggstackStatusEl.textContent = `Yggstack: ${stateLabel}. ${info.note ?? ""}`.trim();
 }
 
 function syncButtons() {
@@ -402,7 +688,7 @@ function renderSessionCard() {
     activeHostCardEl.className = "active-host-card empty";
     activeHostCardEl.innerHTML = `
       <div class="active-host-layout">
-        <div class="host-avatar">MC</div>
+        <div class="host-avatar">${avatarMarkup(hostSession.roomName)}</div>
         <div class="host-details">
           <h3>${escapeHtml(t("hostEmptyTitle"))}</h3>
           <p>${escapeHtml(t("hostEmptyDescription"))}</p>
@@ -415,9 +701,9 @@ function renderSessionCard() {
   activeHostCardEl.className = "active-host-card";
   activeHostCardEl.innerHTML = `
     <div class="active-host-layout">
-      <div class="host-avatar">MC</div>
+      <div class="host-avatar">${avatarMarkup(hostSession.roomName)}</div>
       <div class="host-details">
-        <h3>${escapeHtml(hostSession.roomName)}</h3>
+        <h3>${renderMinecraftFormattedText(hostSession.roomName)}</h3>
         <p>${escapeHtml(t("hostCardPlayers", { count: status?.peerCount ?? 0 }))}</p>
         <div class="host-meta-row">
           <span class="host-meta-pill">${escapeHtml(t("hostCardVersion", { version }))}</span>
@@ -487,7 +773,7 @@ function renderServers() {
         <article class="server-row ${isSelected ? "active" : ""}" data-select-server="${escapeHtml(server.clientId)}">
           <div class="server-main">
             <div class="server-main-top">
-              <strong>${escapeHtml(server.roomName)}</strong>
+              <strong class="minecraft-name">${renderMinecraftFormattedText(server.roomName)}</strong>
               <span class="row-chip">${server.cloudflareEnabled ? "☁" : server.hasPassword ? "🔒" : "⚔"}</span>
             </div>
             <span>${escapeHtml(server.hostName)}${isLocal ? ` · ${escapeHtml(t("selfHostLabel"))}` : ""}</span>
@@ -538,7 +824,12 @@ function hydrateServers(members) {
         transport: data.transport ?? null,
         transportPreference: data.transport_preference ?? "direct",
         cloudflareEnabled: Boolean(data.cloudflare_enabled),
+        cloudflareTurnReady: Boolean(data.cloudflare_turn_ready),
         cloudflareTurnEndpoint: data.cloudflare_turn_endpoint ?? null,
+        yggReady: Boolean(data.ygg_ready),
+        yggAddress: data.ygg_address ?? null,
+        yggPublicKey: data.ygg_public_key ?? null,
+        yggSubnet: data.ygg_subnet ?? null,
       };
     })
     .filter((server) => Boolean(server.peerId) && (server.peerAddrs.length > 0 || Boolean(server.peerAddr)));
@@ -556,7 +847,7 @@ function buildPresencePayload(status) {
   const endpoint = advertisedEndpoint(hostSession.listenAddrs, hostSession.peerAddr);
   return {
     room_name: hostSession.roomName,
-    host_name: localClientId,
+    host_name: currentNickname(),
     slots: `${Math.max(1, (status?.peerCount ?? 0) + 1)}/30`,
     has_password: hostSession.hasPassword,
     peer_id: hostSession.peerId ?? localClientId,
@@ -568,7 +859,12 @@ function buildPresencePayload(status) {
     transport: status?.transportPath ?? state.activeTunnelTransport ?? null,
     transport_preference: hostSession.useCloudflare ? "cloudflare" : "direct",
     cloudflare_enabled: hostSession.useCloudflare,
+    cloudflare_turn_ready: Boolean(status?.cloudflareTurnReady),
     cloudflare_turn_endpoint: status?.cloudflareTurnEndpoint ?? null,
+    ygg_ready: Boolean(hostSession.yggEnabled && hostSession.yggAddress),
+    ygg_address: hostSession.yggAddress ?? null,
+    ygg_public_key: hostSession.yggPublicKey ?? null,
+    ygg_subnet: hostSession.yggSubnet ?? null,
   };
 }
 
@@ -626,6 +922,15 @@ function renderStatus(status) {
   renderLogs();
   renderSelectedServer();
   updateHintFromStatus(status);
+  if (overlayStatusLineEl) {
+    overlayStatusLineEl.textContent =
+      status.mode === "client" && state.tunnelReady
+        ? `Туннель активен: ${formatTransportLabel(status.transportPath ?? state.activeTunnelTransport)}. Подключайтесь к localhost:25565.`
+        : status.mode === "host"
+          ? `Комната ${status.roomCode ?? "без имени"} опубликована. Ждём подключения игроков.`
+          : `Оверлей скрыт в трее. Открывайте его по ${normalizedShortcut(state.preferences.profile.overlayShortcut)}.`;
+  }
+  syncProfileSurface();
   syncButtons();
 }
 
@@ -696,6 +1001,48 @@ async function bindChannelHandlers() {
         addLog(t("hostPunchSent", { addr: peerAddr }));
       } catch (error) {
         addLog(`Punch error: ${String(error)}`);
+      }
+    });
+
+    await state.privateChannel.subscribe("cloudflare-offer", async (message) => {
+      const requester = message.data?.client_id ?? message.clientId ?? "unknown";
+      const sessionId = message.data?.session_id;
+      const offerJson = message.data?.offer_json;
+      const peerAddr = message.data?.peer_addr ?? "unknown";
+      if (!sessionId || !offerJson) return;
+
+      try {
+        addLog(`Cloudflare offer получен от ${requester}.`);
+        const answerJson = await invoke("cloudflare_accept_offer", {
+          sessionId,
+          offerJson,
+          peerAddr,
+        });
+        await state.realtime.channels.get(`lobby:${requester}`).publish("cloudflare-answer", {
+          client_id: localClientId,
+          session_id: sessionId,
+          answer_json: answerJson,
+          peer_addr: hostSession.peerAddr,
+        });
+        addLog(`Cloudflare answer отправлен клиенту ${requester}.`);
+      } catch (error) {
+        addLog(`Cloudflare host answer failed: ${String(error)}`);
+      }
+    });
+
+    await state.privateChannel.subscribe("cloudflare-answer", async (message) => {
+      const sessionId = message.data?.session_id;
+      const answerJson = message.data?.answer_json;
+      if (!sessionId || !answerJson) return;
+
+      try {
+        addLog("Cloudflare answer получен от хоста.");
+        await invoke("cloudflare_finish_client_answer", { sessionId, answerJson });
+      } catch (error) {
+        addLog(`Cloudflare client answer apply failed: ${String(error)}`);
+        if (state.pendingTransportFlow) {
+          await startRelayFallback(state.pendingTransportFlow);
+        }
       }
     });
     state.privateChannel.__mcp2pHandshakeBound = true;
@@ -832,6 +1179,7 @@ async function stopEmbeddedTestServer() {
 async function copyDiagnosticsSnapshot() {
   try {
     const localPort = Number(localGamePortEl.value || 25565);
+    await invoke("run_network_self_check_command");
     const snapshot = await invoke("export_diagnostics_snapshot", { localPort });
     await navigator.clipboard.writeText(JSON.stringify(snapshot, null, 2));
     addLog("Полная диагностика скопирована в буфер обмена.");
@@ -854,6 +1202,137 @@ async function probeEmbeddedTestServer() {
   }
 }
 
+async function refreshYggstackRuntime({ silent = true } = {}) {
+  try {
+    const info = await invoke("get_yggstack_runtime_info");
+    renderYggstackRuntime(info);
+    if (!silent) addLog(`Yggstack status: ${info.note}`);
+  } catch (error) {
+    if (!silent) addLog(`Не удалось получить статус Yggstack: ${String(error)}`);
+  }
+}
+
+async function prepareYggstackRuntimeActionLegacy() {
+  try {
+    const info = await invoke("prepare_yggstack_runtime");
+    renderYggstackRuntime(info);
+    addLog(`Yggstack runtime подготовлен. Бинарник: ${info.binaryPath ?? "n/a"}`);
+  } catch (error) {
+    addLog(`Не удалось подготовить Yggstack runtime: ${String(error)}`);
+  }
+}
+
+async function startYggstackSidecarActionLegacy() {
+  try {
+    const info = await invoke("start_yggstack_sidecar");
+    renderYggstackRuntime(info);
+    addLog(`Yggstack sidecar запущен. Лог: ${info.logPath ?? "n/a"}`);
+  } catch (error) {
+    addLog(`Не удалось запустить Yggstack sidecar: ${String(error)}`);
+  }
+}
+
+async function stopYggstackSidecarActionLegacy() {
+  try {
+    const info = await invoke("stop_yggstack_sidecar");
+    renderYggstackRuntime(info);
+    addLog("Yggstack sidecar остановлен.");
+  } catch (error) {
+    addLog(`Не удалось остановить Yggstack sidecar: ${String(error)}`);
+  }
+}
+
+function renderYggstackRuntime(info) {
+  state.yggstackInfo = info ?? null;
+  if (!yggstackStatusEl) return;
+  if (!info) {
+    yggstackStatusEl.textContent = "Yggstack: встроенный runtime ещё не проверен.";
+    return;
+  }
+
+  const embedded = info.binaryPath === "embedded://yggstackbridge";
+  let stateLabel = "runtime не готов";
+  if (info.running) {
+    stateLabel = embedded ? "встроенный bridge запущен" : "runtime запущен";
+  } else if (info.ready) {
+    stateLabel = embedded ? "встроенный bridge готов" : "runtime готов";
+  }
+
+  yggstackStatusEl.textContent = `Yggstack: ${stateLabel}. ${info.note ?? ""}`.trim();
+}
+
+async function prepareYggstackRuntimeAction() {
+  try {
+    const info = await invoke("prepare_yggstack_runtime");
+    renderYggstackRuntime(info);
+    addLog(`Yggstack готов. Источник: ${info.binaryPath ?? "embedded"}`);
+  } catch (error) {
+    addLog(`Не удалось подготовить Yggstack: ${String(error)}`);
+  }
+}
+
+async function startYggstackSidecarAction() {
+  try {
+    const info = await invoke("start_yggstack_sidecar");
+    renderYggstackRuntime(info);
+    addLog(
+      info.binaryPath === "embedded://yggstackbridge"
+        ? "Встроенный Yggstack bridge запущен."
+        : `Yggstack runtime запущен. Лог: ${info.logPath ?? "n/a"}`,
+    );
+  } catch (error) {
+    addLog(`Не удалось запустить Yggstack: ${String(error)}`);
+  }
+}
+
+async function retryYggstackPeersAction() {
+  try {
+    const info = await invoke("retry_yggstack_peers");
+    renderYggstackRuntime(info);
+    addLog("Yggstack: инициирован повторный peer-discovery.");
+  } catch (error) {
+    addLog(`Не удалось обновить peer'ы Yggstack: ${String(error)}`);
+  }
+}
+
+async function stopYggstackSidecarAction() {
+  try {
+    const info = await invoke("stop_yggstack_sidecar");
+    renderYggstackRuntime(info);
+    addLog(
+      info.binaryPath === "embedded://yggstackbridge"
+        ? "Встроенный Yggstack bridge остановлен."
+        : "Yggstack runtime остановлен.",
+    );
+  } catch (error) {
+    addLog(`Не удалось остановить Yggstack: ${String(error)}`);
+  }
+}
+
+async function ensureYggstackReady({ autoStart = false, silent = false } = {}) {
+  try {
+    let info = await invoke("get_yggstack_runtime_info");
+    renderYggstackRuntime(info);
+
+    if (autoStart && info.ready && !info.running) {
+      info = await invoke("start_yggstack_sidecar");
+      renderYggstackRuntime(info);
+      if (!silent) {
+        addLog(
+          info.binaryPath === "embedded://yggstackbridge"
+            ? "Встроенный Yggstack bridge автоматически запущен."
+            : "Yggstack runtime автоматически запущен.",
+        );
+      }
+    }
+
+    return info;
+  } catch (error) {
+    if (!silent) addLog(`Не удалось проверить Yggstack runtime: ${String(error)}`);
+    return null;
+  }
+}
+
 async function startHosting() {
   if (!canOpenHostModal()) return;
   const roomName = roomNameEl.value.trim();
@@ -864,7 +1343,7 @@ async function startHosting() {
 
   const localPort = Number(localGamePortEl.value || 25565);
   const password = requirePasswordEl.checked ? roomPasswordEl.value.trim() || null : null;
-  const useCloudflare = Boolean(useCloudflareEl.checked);
+  let useCloudflare = Boolean(useCloudflareEl.checked);
   hostButtonEl.disabled = true;
   state.tunnelReady = false;
   setMinecraftHint(t("hintWaiting"), false);
@@ -874,6 +1353,22 @@ async function startHosting() {
     if (!preflight.reachable) {
       addLog("Хост не запущен: локальный Minecraft недоступен. Сначала откройте мир в LAN или запустите тестовый сервер.");
       return;
+    }
+
+    const yggInfo = await ensureYggstackReady({ autoStart: true, silent: false });
+    hostSession.yggEnabled = Boolean(yggInfo?.ready);
+    hostSession.yggAddress = yggInfo?.yggAddress ?? null;
+    hostSession.yggPublicKey = yggInfo?.yggPublicKey ?? null;
+    hostSession.yggSubnet = yggInfo?.yggSubnet ?? null;
+
+    if (useCloudflare) {
+      const runtime = await invoke("get_cloudflare_runtime_info");
+      if (!runtime.ready) {
+        addLog(`Cloudflare fallback недоступен сейчас: ${runtime.note}`);
+        useCloudflare = false;
+      } else {
+        addLog(`Cloudflare TURN backend готов: ${runtime.turnEndpoint ?? "turn:turn.cloudflare.com:3478"}`);
+      }
     }
 
     const bootstrap = await invoke("start_hosting", { roomName, password, localPort, useCloudflare });
@@ -930,6 +1425,10 @@ async function stopSession() {
     hostSession.localPort = 25565;
     hostSession.minecraftVersion = null;
     hostSession.useCloudflare = false;
+    hostSession.yggEnabled = false;
+    hostSession.yggAddress = null;
+    hostSession.yggPublicKey = null;
+    hostSession.yggSubnet = null;
     hostSession.presencePayload = null;
     hostSession.presenceEntered = false;
     state.selectedServerId = null;
@@ -937,6 +1436,54 @@ async function stopSession() {
     renderStatus(status);
     await refreshLobby();
     addLog(t("hostStopped"));
+  }
+}
+
+async function startCloudflareFallback(flow) {
+  if (!flow || flow.cloudflareAttempted) return;
+  flow.cloudflareAttempted = true;
+  addLog("Direct path не поднялся. Перехожу на Cloudflare TURN/WebRTC.");
+
+  try {
+    const runtime = await invoke("get_cloudflare_runtime_info");
+    if (!runtime.ready) {
+      addLog(`Cloudflare runtime недоступен: ${runtime.note}`);
+      await startRelayFallback(flow);
+      return;
+    }
+
+    const offerJson = await invoke("cloudflare_create_offer", {
+      sessionId: flow.cloudflareSessionId,
+      peerAddr: flow.server.peerAddr,
+    });
+    await state.realtime.channels.get(`lobby:${flow.server.clientId}`).publish("cloudflare-offer", {
+      client_id: localClientId,
+      session_id: flow.cloudflareSessionId,
+      peer_addr: flow.server.peerAddr,
+      offer_json: offerJson,
+    });
+    addLog(`Cloudflare offer отправлен хосту ${flow.server.clientId}.`);
+  } catch (error) {
+    addLog(`Cloudflare fallback failed before answer: ${String(error)}`);
+    await startRelayFallback(flow);
+  }
+}
+
+async function startRelayFallback(flow) {
+  if (!flow || flow.relayAttempted) return;
+  flow.relayAttempted = true;
+  addLog(`Cloudflare не помог. Перехожу на MQTT relay session ${flow.relaySessionId}.`);
+  try {
+    await invoke("start_relay_fallback", {
+      peerId: flow.server.peerId,
+      peerAddrs: flow.peerAddrs,
+      relaySessionId: flow.relaySessionId,
+    });
+  } catch (error) {
+    addLog(`Relay fallback failed to start: ${String(error)}`);
+    state.pendingConnects.delete(flow.server.clientId);
+    state.pendingTransportFlow = null;
+    renderServers();
   }
 }
 
@@ -970,20 +1517,24 @@ async function connectToServer(server) {
   }
 
   try {
+    await ensureYggstackReady({ autoStart: true, silent: true });
     addLog(t("connectProgress", { room: server.roomName, addr: server.peerAddr }));
+    const cloudflarePreferred = Boolean(server.cloudflareEnabled && server.cloudflareTurnReady);
     if (server.cloudflareEnabled) {
       addLog(
         `Хост ${server.roomName} помечен как Cloudflare-preferred. Сначала пробуем direct path, затем текущий fallback.`,
       );
     }
     const relaySessionId = `${server.cloudflareEnabled ? "cfrelay" : "relay"}-${crypto.randomUUID()}`;
+    const cloudflareSessionId = `cfwebrtc-${crypto.randomUUID()}`;
     const peerAddrs = sortAdvertisedAddrs(
       [...new Set([...(server.peerAddrs ?? []), normalizeToMultiaddr(server.peerAddr)].filter(Boolean))],
     );
     await invoke("connect_to_peer", {
       peerId: server.peerId,
       peerAddrs,
-      relaySessionId,
+      relaySessionId: cloudflarePreferred ? null : relaySessionId,
+      allowRelayFallback: !cloudflarePreferred,
     });
     const status = await waitForStatus(
       (snapshot) =>
@@ -999,6 +1550,14 @@ async function connectToServer(server) {
       peer_addr: status.publicUdpAddr ?? status.udpBindAddr,
       relay_session_id: relaySessionId,
     });
+    state.pendingTransportFlow = {
+      server,
+      peerAddrs,
+      relaySessionId,
+      cloudflareSessionId,
+      cloudflareAttempted: false,
+      relayAttempted: !cloudflarePreferred,
+    };
     addLog(t("connectRequestSent", { host: server.clientId }));
   } catch (error) {
     state.pendingConnects.delete(server.clientId);
@@ -1088,6 +1647,45 @@ await listen("connection_success", async (event) => {
   renderServers();
 });
 
+await listen("cloudflare_connecting", async () => {
+  addLog("Cloudflare TURN/WebRTC negotiation started.");
+});
+
+await listen("cloudflare_connected", async (event) => {
+  state.pendingConnects.clear();
+  state.tunnelReady = true;
+  state.activeTunnelTransport = "cloudflare-webrtc";
+  state.pendingTransportFlow = null;
+  setMinecraftHint(t("hintConnected"), true);
+  addLog(
+    `${t("tunnelEstablishedLog", { addr: "localhost:25565" })} (${formatTransportLabel("cloudflare-webrtc")})`,
+  );
+  const status = await invoke("get_status");
+  renderStatus(status);
+  renderServers();
+});
+
+await listen("cloudflare_failed", async (event) => {
+  addLog(`Cloudflare fallback failed: ${event.payload?.reason ?? "unknown error"}`);
+  if (state.pendingTransportFlow) {
+    await startRelayFallback(state.pendingTransportFlow);
+  }
+});
+
+await listen("tunnel_failed", async (event) => {
+  addLog(`Tunnel failed: ${event.payload?.reason ?? "unknown"}`);
+  if (state.pendingTransportFlow?.server?.cloudflareEnabled && state.pendingTransportFlow?.server?.cloudflareTurnReady) {
+    await startCloudflareFallback(state.pendingTransportFlow);
+    return;
+  }
+  if (state.pendingTransportFlow) {
+    await startRelayFallback(state.pendingTransportFlow);
+    return;
+  }
+  state.pendingConnects.clear();
+  renderServers();
+});
+
 await listen("reverse_tunnel_ready", async (event) => {
   const endpoint = normalizeToMultiaddr(event.payload?.endpoint ?? null);
   const multiaddr = normalizeToMultiaddr(event.payload?.multiaddr ?? null);
@@ -1124,11 +1722,22 @@ await listen("hole_punch_success", async (event) => {
 
 navHomeEl.addEventListener("click", () => setPage("home"));
 navSettingsEl.addEventListener("click", () => setPage("settings"));
+openProfileModalEl?.addEventListener("click", () => openProfileModal(false));
 openHostModalEl.addEventListener("click", openModal);
 closeModalEl.addEventListener("click", closeModal);
 closeModalSecondaryEl.addEventListener("click", closeModal);
 modalEl.addEventListener("click", (event) => {
   if (event.target instanceof HTMLElement && event.target.dataset.closeModal === "true") closeModal();
+});
+profileModalEl?.addEventListener("click", (event) => {
+  if (event.target instanceof HTMLElement && event.target.dataset.closeProfileModal === "true") {
+    closeProfileModal();
+  }
+});
+closeProfileModalEl?.addEventListener("click", closeProfileModal);
+closeProfileModalSecondaryEl?.addEventListener("click", closeProfileModal);
+hideOverlayButtonEl?.addEventListener("click", async () => {
+  await appWindow.hide();
 });
 
 requirePasswordEl.addEventListener("change", syncPasswordField);
@@ -1168,6 +1777,18 @@ stopTestServerEl.addEventListener("click", async () => {
 probeTestServerEl.addEventListener("click", async () => {
   await probeEmbeddedTestServer();
 });
+prepareYggstackEl?.addEventListener("click", async () => {
+  await prepareYggstackRuntimeAction();
+});
+startYggstackEl?.addEventListener("click", async () => {
+  await startYggstackSidecarAction();
+});
+retryYggstackEl?.addEventListener("click", async () => {
+  await retryYggstackPeersAction();
+});
+stopYggstackEl?.addEventListener("click", async () => {
+  await stopYggstackSidecarAction();
+});
 connectSelectedEl.addEventListener("click", async () => {
   const selected = getSelectedServer();
   if (selected) await connectToServer(selected);
@@ -1203,15 +1824,54 @@ document.querySelectorAll("[data-theme-value]").forEach((button) => {
 document.querySelectorAll("[data-language-value]").forEach((button) => {
   button.addEventListener("click", () => applyLanguage(button.dataset.languageValue));
 });
-
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closeModal();
+saveProfileButtonEl?.addEventListener("click", async () => {
+  await persistProfileFromFields(settingsNicknameEl, settingsShortcutInputEl, settingsAvatarInputEl);
+});
+saveProfileModalEl?.addEventListener("click", async () => {
+  await persistProfileFromFields(profileNicknameInputEl, profileShortcutInputEl, profileAvatarInputEl, {
+    closeAfter: true,
+  });
+});
+clearAvatarButtonEl?.addEventListener("click", async () => {
+  state.preferences.profile.avatarDataUrl = null;
+  if (settingsAvatarInputEl) settingsAvatarInputEl.value = "";
+  if (profileAvatarInputEl) profileAvatarInputEl.value = "";
+  saveProfile();
+  syncProfileSurface();
+  addLog("Аватар очищен.");
+});
+settingsAvatarInputEl?.addEventListener("change", async () => {
+  const file = settingsAvatarInputEl.files?.[0];
+  if (!file) return;
+  state.preferences.profile.avatarDataUrl = await fileToDataUrl(file);
+  syncProfileSurface();
+});
+profileAvatarInputEl?.addEventListener("change", async () => {
+  const file = profileAvatarInputEl.files?.[0];
+  if (!file) return;
+  state.preferences.profile.avatarDataUrl = await fileToDataUrl(file);
+  syncProfileSurface();
 });
 
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (!modalEl.classList.contains("hidden")) {
+    closeModal();
+    return;
+  }
+  if (profileModalEl && !profileModalEl.classList.contains("hidden")) {
+    closeProfileModal();
+    return;
+  }
+  void appWindow.hide();
+});
+
+await hydrateProfile();
 document.body.dataset.theme = state.preferences.theme;
 applyTranslations();
 renderSettingsOptions();
 syncPasswordField();
+syncProfileSurface();
 renderLogs();
 renderSelectedServer();
 renderSessionCard();
@@ -1223,4 +1883,5 @@ setInterval(() => {
 }, POLL_INTERVAL_MS);
 
 await setupAbly();
+await refreshYggstackRuntime({ silent: true });
 await pollStatus();

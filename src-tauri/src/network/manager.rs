@@ -15,7 +15,8 @@ use uuid::Uuid;
 
 use crate::{
     cert::{build_insecure_client_config, build_server_config},
-    models::{ConnectionState, NetworkStatus, PeerInfo, SessionMode},
+    diagnostics::DiagnosticsStore,
+    models::{ConnectionState, NetworkStatus, PeerInfo, SessionMode, TransportAttempt, TransportKind},
     signaling::{discover_public_addr, punch_remote, SignalingConfig},
 };
 
@@ -40,6 +41,7 @@ struct Inner {
     control: Mutex<()>,
     session: Mutex<Option<SessionRuntime>>,
     status: Arc<RwLock<NetworkStatus>>,
+    diagnostics: DiagnosticsStore,
     stun: SignalingConfig,
     relay: RelayConfig,
     cloudflare: CloudflareConfig,
@@ -93,7 +95,39 @@ struct TunnelFailedEvent {
 }
 
 impl NetworkManager {
+    pub fn new_with_shared(
+        status: Arc<RwLock<NetworkStatus>>,
+        diagnostics: DiagnosticsStore,
+    ) -> Self {
+        let stun = SignalingConfig::from_env();
+        let relay = RelayConfig::from_env().expect("relay config must be valid");
+        let mut initial_status = NetworkStatus {
+            signaling_server: ABLY_SIGNAL_LABEL.into(),
+            ..Default::default()
+        };
+        initial_status.logs.push("Minecraft P2P Connector запущен.".into());
+        *status.blocking_write() = initial_status;
+
+        Self {
+            inner: Arc::new(Inner {
+                control: Mutex::new(()),
+                session: Mutex::new(None),
+                status,
+                diagnostics,
+                stun,
+                relay,
+                cloudflare: CloudflareConfig::from_env(),
+            }),
+        }
+    }
+
     pub fn new() -> Self {
+        Self::new_with_shared(
+            Arc::new(RwLock::new(NetworkStatus::default())),
+            DiagnosticsStore::new(),
+        )
+    }
+    /*
         let stun = SignalingConfig::from_env();
         let relay = RelayConfig::from_env().expect("relay config must be valid");
         let mut status = NetworkStatus {
@@ -107,12 +141,14 @@ impl NetworkManager {
                 control: Mutex::new(()),
                 session: Mutex::new(None),
                 status: Arc::new(RwLock::new(status)),
+                diagnostics: DiagnosticsStore::new(),
                 stun,
                 relay,
                 cloudflare: CloudflareConfig::from_env(),
             }),
         }
     }
+    */
 
     pub async fn get_status(&self) -> NetworkStatus {
         self.inner.status.read().await.clone()
@@ -120,6 +156,11 @@ impl NetworkManager {
 
     pub fn shared_status(&self) -> Arc<RwLock<NetworkStatus>> {
         self.inner.status.clone()
+    }
+
+    #[allow(dead_code)]
+    pub fn diagnostics(&self) -> DiagnosticsStore {
+        self.inner.diagnostics.clone()
     }
 
     pub async fn start_hosting(
@@ -243,6 +284,7 @@ impl NetworkManager {
             local_game_port: Some(local_port),
             transport_preference: Some(if use_cloudflare { "cloudflare" } else { "direct" }.into()),
             cloudflare_enabled: use_cloudflare,
+            cloudflare_turn_ready: use_cloudflare && self.inner.cloudflare.runtime_available(),
             cloudflare_turn_endpoint: self.inner.cloudflare.first_turn_endpoint(),
             password_protected: has_password,
             signaling_server: ABLY_SIGNAL_LABEL.into(),
@@ -284,6 +326,7 @@ impl NetworkManager {
             minecraft_version: minecraft_version.clone(),
             transport_preference: Some(if use_cloudflare { "cloudflare" } else { "direct" }.into()),
             cloudflare_enabled: use_cloudflare,
+            cloudflare_turn_ready: use_cloudflare && self.inner.cloudflare.runtime_available(),
             cloudflare_turn_endpoint: self.inner.cloudflare.first_turn_endpoint(),
             password_protected: has_password,
             signaling_server: ABLY_SIGNAL_LABEL.into(),
@@ -550,6 +593,15 @@ impl NetworkManager {
             }
             Err(direct_error) => {
                 punch_handle.abort();
+                self.inner
+                    .diagnostics
+                    .set_direct_attempt(TransportAttempt {
+                        transport: "direct-quic".into(),
+                        success: false,
+                        detail: format!("{direct_error:#}"),
+                        endpoint: Some(peer_addr.to_string()),
+                    })
+                    .await;
                 self.push_log(format!(
                     "Direct QUIC path failed for {peer_addr}: {direct_error:#}"
                 ))
@@ -585,6 +637,7 @@ impl NetworkManager {
 
         self.mutate_status(|status| {
             status.state = ConnectionState::Connected;
+            status.transport_kind = TransportKind::DirectQuic;
             status.transport_path = Some("direct-quic".into());
             status.note = Some(
                 "Соединение установлено. Подключайтесь в Minecraft к localhost:25565.".into(),
@@ -598,6 +651,19 @@ impl NetworkManager {
         })
         .await;
         self.push_log("Локальный proxy на 127.0.0.1:25565 поднят.".into())
+            .await;
+        self.inner
+            .diagnostics
+            .set_direct_attempt(TransportAttempt {
+                transport: "direct-quic".into(),
+                success: true,
+                detail: "Direct QUIC tunnel established".into(),
+                endpoint: Some(peer_addr.to_string()),
+            })
+            .await;
+        self.inner
+            .diagnostics
+            .set_selected_transport("direct-quic")
             .await;
         let _ = app.emit(
             "tunnel_established",
@@ -874,6 +940,7 @@ impl NetworkManager {
     ) -> Result<()> {
         self.mutate_status(|status| {
             status.state = ConnectionState::Connecting;
+            status.transport_kind = TransportKind::AblyRelay;
             status.transport_path = Some("ably-relay".into());
             status.transport_preference.get_or_insert_with(|| "direct".into());
             status.note = Some(
@@ -893,6 +960,7 @@ impl NetworkManager {
 
         self.mutate_status(|status| {
             status.state = ConnectionState::Connected;
+            status.transport_kind = TransportKind::AblyRelay;
             status.transport_path = Some("ably-relay".into());
             status.note = Some(
                 "Соединение установлено через relay fallback. Подключайтесь в Minecraft к localhost:25565."
@@ -906,6 +974,10 @@ impl NetworkManager {
             }];
         })
         .await;
+        self.inner
+            .diagnostics
+            .set_selected_transport("ably-relay")
+            .await;
         self.push_log(format!(
             "Relay fallback ready for {peer_addr} via session {session_id}."
         ))

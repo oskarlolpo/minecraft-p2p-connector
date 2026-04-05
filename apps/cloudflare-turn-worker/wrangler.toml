@@ -1,0 +1,10 @@
+name = "minecraft-p2p-turn-worker"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-04-04"
+workers_dev = true
+
+[build]
+command = "%USERPROFILE%\\.cargo\\bin\\cargo install -q worker-build && %USERPROFILE%\\.cargo\\bin\\worker-build --release"
+
+[vars]
+TURN_CREDENTIAL_TTL = "3600"

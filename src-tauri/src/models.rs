@@ -29,7 +29,10 @@ pub enum TransportKind {
     #[default]
     Unknown,
     Direct,
+    DirectQuic,
+    CloudflareWebrtc,
     Relay,
+    AblyRelay,
     ReverseTunnel,
     MeshFallback,
 }
@@ -78,6 +81,7 @@ pub struct NetworkStatus {
     pub transport_path: Option<String>,
     pub transport_preference: Option<String>,
     pub cloudflare_enabled: bool,
+    pub cloudflare_turn_ready: bool,
     pub cloudflare_turn_endpoint: Option<String>,
     pub password_protected: bool,
     pub peer_count: usize,
@@ -103,6 +107,7 @@ impl Default for NetworkStatus {
             transport_path: None,
             transport_preference: None,
             cloudflare_enabled: false,
+            cloudflare_turn_ready: false,
             cloudflare_turn_endpoint: None,
             password_protected: false,
             peer_count: 0,
@@ -141,4 +146,81 @@ pub struct DiagnosticSnapshot {
     pub status: NetworkStatus,
     pub preflight: Option<PreflightReport>,
     pub test_server: Option<TestServerInfo>,
+    pub network_checks: Option<NetworkChecks>,
+    pub direct_attempt: Option<TransportAttempt>,
+    pub cloudflare_attempt: Option<CloudflareAttempt>,
+    pub yggstack_runtime: Option<YggstackRuntimeInfo>,
+    pub selected_transport: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckResult {
+    pub ok: bool,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkChecks {
+    pub ably_tcp: CheckResult,
+    pub system_dns: CheckResult,
+    pub fallback_dns: CheckResult,
+    pub cloudflare_https: Option<CheckResult>,
+    pub turn_udp: CheckResult,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TransportAttempt {
+    pub transport: String,
+    pub success: bool,
+    pub detail: String,
+    pub endpoint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudflareAttempt {
+    pub transport: String,
+    pub success: bool,
+    pub detail: String,
+    pub credential_status: String,
+    pub selected_candidate_pair: Option<String>,
+    pub endpoint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudflareRuntimeInfo {
+    pub ready: bool,
+    pub credential_endpoint: Option<String>,
+    pub turn_endpoint: Option<String>,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct YggstackRuntimeInfo {
+    pub ready: bool,
+    pub running: bool,
+    pub source_dir: Option<String>,
+    pub runtime_dir: Option<String>,
+    pub binary_path: Option<String>,
+    pub config_path: Option<String>,
+    pub log_path: Option<String>,
+    pub ygg_public_key: Option<String>,
+    pub ygg_address: Option<String>,
+    pub ygg_subnet: Option<String>,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UserProfile {
+    pub nickname: String,
+    pub avatar_data_url: Option<String>,
+    pub theme: String,
+    pub language: String,
+    pub overlay_shortcut: String,
 }

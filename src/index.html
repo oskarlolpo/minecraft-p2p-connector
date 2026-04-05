@@ -23,6 +23,25 @@
       </aside>
 
       <main class="workspace">
+        <header class="overlay-topbar" data-tauri-drag-region>
+          <div class="overlay-brand">
+            <div class="overlay-brand-mark">BP</div>
+            <div class="overlay-brand-copy">
+              <strong>Blood Paradise Hub</strong>
+              <span id="overlay-status-line">Оверлей скрыт в трее. Открывайте его горячей клавишей.</span>
+            </div>
+          </div>
+
+          <div class="overlay-actions">
+            <button id="open-profile-modal" class="profile-pill" type="button">
+              <span id="topbar-profile-avatar" class="profile-pill-avatar">BP</span>
+              <span id="topbar-profile-name">Локальный игрок</span>
+            </button>
+            <div id="overlay-shortcut-chip" class="shortcut-chip">SHIFT+TAB</div>
+            <button id="hide-overlay-button" class="secondary-button compact" type="button">Скрыть</button>
+          </div>
+        </header>
+
         <section id="page-home" class="page page-active">
           <header class="hero-panel">
             <div class="hero-copy">
@@ -194,6 +213,15 @@
                     Копировать лог
                   </button>
                 </div>
+                <div class="panel-note" id="yggstack-status" style="margin-bottom: 14px;">
+                  Yggstack: runtime ещё не подготовлен.
+                </div>
+                <div class="selected-actions" style="margin-bottom: 14px;">
+                  <button id="prepare-yggstack" class="secondary-button" type="button">Проверить Yggstack</button>
+                  <button id="start-yggstack" class="secondary-button" type="button">Запустить Yggstack</button>
+                  <button id="retry-yggstack" class="secondary-button" type="button">Обновить peer'ы</button>
+                  <button id="stop-yggstack" class="secondary-button" type="button">Остановить Yggstack</button>
+                </div>
                 <div class="selected-actions" style="margin-bottom: 14px;">
                   <button id="copy-diagnostics" class="secondary-button" type="button">Copy Diagnostics JSON</button>
                 </div>
@@ -215,6 +243,47 @@
           </header>
 
           <div class="settings-grid">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="section-label">ПРОФИЛЬ</p>
+                  <h2>Локальный игрок и оверлей</h2>
+                </div>
+              </div>
+
+              <div class="profile-settings-grid">
+                <div class="profile-preview-card">
+                  <div id="settings-avatar-preview" class="profile-preview-avatar">BP</div>
+                  <div class="profile-preview-copy">
+                    <strong id="settings-profile-name">Локальный игрок</strong>
+                    <span id="settings-profile-subtitle">Этот профиль публикуется в lobby и отображается в overlay.</span>
+                  </div>
+                </div>
+
+                <div class="profile-form-stack">
+                  <label class="field">
+                    <span>Ник игрока</span>
+                    <input id="settings-nickname" type="text" maxlength="24" placeholder="Например, Oskar" />
+                  </label>
+
+                  <label class="field">
+                    <span>Аватар</span>
+                    <input id="settings-avatar-input" type="file" accept="image/*" />
+                  </label>
+
+                  <label class="field">
+                    <span>Горячая клавиша overlay</span>
+                    <input id="settings-shortcut-input" type="text" maxlength="32" placeholder="SHIFT+TAB" />
+                  </label>
+
+                  <div class="modal-actions profile-actions">
+                    <button id="clear-avatar-button" class="secondary-button" type="button">Очистить аватар</button>
+                    <button id="save-profile-button" class="gradient-button small" type="button">Сохранить профиль</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
             <section class="panel">
               <div class="panel-header">
                 <div>
@@ -329,6 +398,49 @@
           <button id="host-button" class="gradient-button small" type="button" data-i18n="modalHostButton">
             ХОСТИТЬ
           </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="profile-modal" class="modal-shell hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-profile-modal="true"></div>
+      <div class="modal-card profile-modal-card" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title">
+        <div class="panel-header">
+          <div>
+            <p class="section-label">ПРОФИЛЬ И ОВЕРЛЕЙ</p>
+            <h2 id="profile-modal-title">Первичная настройка</h2>
+          </div>
+          <button id="close-profile-modal" class="icon-button" type="button" aria-label="Закрыть">×</button>
+        </div>
+
+        <div class="profile-modal-layout">
+          <div class="profile-preview-card profile-preview-card-modal">
+            <div id="profile-avatar-preview" class="profile-preview-avatar">BP</div>
+            <div class="profile-preview-copy">
+              <strong>Как вас увидят другие игроки</strong>
+              <span>Ник, аватар и сочетание клавиш можно будет поменять позже в настройках.</span>
+            </div>
+          </div>
+
+          <label class="field">
+            <span>Ник игрока</span>
+            <input id="profile-nickname-input" type="text" maxlength="24" placeholder="Введите ваш ник" />
+          </label>
+
+          <label class="field">
+            <span>Аватар</span>
+            <input id="profile-avatar-input" type="file" accept="image/*" />
+          </label>
+
+          <label class="field">
+            <span>Горячая клавиша overlay</span>
+            <input id="profile-shortcut-input" type="text" maxlength="32" placeholder="SHIFT+TAB" />
+          </label>
+        </div>
+
+        <div class="modal-actions profile-actions">
+          <button id="close-profile-modal-secondary" class="secondary-button" type="button">Позже</button>
+          <button id="save-profile-modal" class="gradient-button small" type="button">Сохранить</button>
         </div>
       </div>
     </div>
