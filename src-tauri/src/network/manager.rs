@@ -1,4 +1,4 @@
-﻿use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use quinn::{Connection, Endpoint, EndpointConfig, VarInt};
@@ -15,13 +15,11 @@ use uuid::Uuid;
 
 use crate::{
     cert::{build_insecure_client_config, build_server_config},
-    diagnostics::DiagnosticsStore,
-    models::{ConnectionState, NetworkStatus, PeerInfo, SessionMode, TransportAttempt, TransportKind},
+    models::{ConnectionState, NetworkStatus, PeerInfo, SessionMode},
     signaling::{discover_public_addr, punch_remote, SignalingConfig},
 };
 
 use super::{
-    cloudflare::CloudflareConfig,
     minecraft, proxy,
     relay::{self, RelayConfig},
 };
@@ -41,10 +39,8 @@ struct Inner {
     control: Mutex<()>,
     session: Mutex<Option<SessionRuntime>>,
     status: Arc<RwLock<NetworkStatus>>,
-    diagnostics: DiagnosticsStore,
     stun: SignalingConfig,
     relay: RelayConfig,
-    cloudflare: CloudflareConfig,
 }
 
 struct SessionRuntime {
@@ -63,7 +59,6 @@ struct HostControl {
     room_name: String,
     peer_id: String,
     local_game_port: u16,
-    use_cloudflare: bool,
     expected_peers: Arc<RwLock<HashMap<SocketAddr, String>>>,
     live_connections: Arc<Mutex<HashMap<String, Connection>>>,
     relay_sessions: Arc<Mutex<HashMap<String, HostRelayRuntime>>>,
@@ -95,63 +90,25 @@ struct TunnelFailedEvent {
 }
 
 impl NetworkManager {
-    pub fn new_with_shared(
-        status: Arc<RwLock<NetworkStatus>>,
-        diagnostics: DiagnosticsStore,
-    ) -> Self {
-        let stun = SignalingConfig::from_env();
-        let relay = RelayConfig::from_env().expect("relay config must be valid");
-        let mut initial_status = NetworkStatus {
-            signaling_server: ABLY_SIGNAL_LABEL.into(),
-            ..Default::default()
-        };
-        initial_status
-            .logs
-            .push("Minecraft P2P Connector запущен.".into());
-        *status.blocking_write() = initial_status;
-
-        Self {
-            inner: Arc::new(Inner {
-                control: Mutex::new(()),
-                session: Mutex::new(None),
-                status,
-                diagnostics,
-                stun,
-                relay,
-                cloudflare: CloudflareConfig::from_env(),
-            }),
-        }
-    }
-
-    #[allow(dead_code)]
     pub fn new() -> Self {
-        Self::new_with_shared(
-            Arc::new(RwLock::new(NetworkStatus::default())),
-            DiagnosticsStore::new(),
-        )
-    }
-    /*
         let stun = SignalingConfig::from_env();
         let relay = RelayConfig::from_env().expect("relay config must be valid");
         let mut status = NetworkStatus {
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             ..Default::default()
         };
-        status.logs.push("Minecraft P2P Connector Р·Р°РїСѓС‰РµРЅ.".into());
+        status.logs.push("Minecraft P2P Connector запущен.".into());
 
         Self {
             inner: Arc::new(Inner {
                 control: Mutex::new(()),
                 session: Mutex::new(None),
                 status: Arc::new(RwLock::new(status)),
-                diagnostics: DiagnosticsStore::new(),
                 stun,
                 relay,
-                cloudflare: CloudflareConfig::from_env(),
             }),
         }
     }
-    */
 
     pub async fn get_status(&self) -> NetworkStatus {
         self.inner.status.read().await.clone()
@@ -161,18 +118,12 @@ impl NetworkManager {
         self.inner.status.clone()
     }
 
-    #[allow(dead_code)]
-    pub fn diagnostics(&self) -> DiagnosticsStore {
-        self.inner.diagnostics.clone()
-    }
-
     pub async fn start_hosting(
         &self,
         _app: AppHandle,
         room_name: String,
         password: Option<String>,
         local_port: u16,
-        use_cloudflare: bool,
     ) -> Result<String> {
         let room_name = room_name.trim().to_string();
         if room_name.is_empty() {
@@ -186,7 +137,7 @@ impl NetworkManager {
         self.reset_session().await;
 
         match self
-            .start_hosting_inner(room_name, password, local_port, use_cloudflare)
+            .start_hosting_inner(room_name, password, local_port)
             .await
         {
             Ok(peer_addr) => Ok(peer_addr),
@@ -272,7 +223,6 @@ impl NetworkManager {
         room_name: String,
         password: Option<String>,
         local_port: u16,
-        use_cloudflare: bool,
     ) -> Result<String> {
         let peer_id = Uuid::new_v4().to_string();
         let expected_peers = Arc::new(RwLock::new(HashMap::<SocketAddr, String>::new()));
@@ -285,7 +235,6 @@ impl NetworkManager {
             state: ConnectionState::Starting,
             room_code: Some(room_name.clone()),
             local_game_port: Some(local_port),
-            transport_preference: Some("direct".into()),
             password_protected: has_password,
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             note: Some("Поднимаю host endpoint и запрашиваю локальную версию Minecraft.".into()),
@@ -324,7 +273,6 @@ impl NetworkManager {
             public_udp_addr: Some(public_udp_addr.to_string()),
             local_game_port: Some(local_port),
             minecraft_version: minecraft_version.clone(),
-            transport_preference: Some("direct".into()),
             password_protected: has_password,
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             note: Some(format!(
@@ -337,7 +285,6 @@ impl NetworkManager {
                 format!("Публичный UDP адрес: {public_udp_addr}"),
                 format!("Локальный bind: {udp_bind_addr}"),
                 format!("Host forwards to {}", proxy::minecraft_local_addr(local_port)),
-                "После direct path будет доступен Yggstack fallback, затем MQTT relay.".into(),
             ],
             ..Default::default()
         })
@@ -361,7 +308,6 @@ impl NetworkManager {
                 room_name,
                 peer_id,
                 local_game_port: local_port,
-                use_cloudflare,
                 expected_peers,
                 live_connections,
                 relay_sessions,
@@ -391,7 +337,6 @@ impl NetworkManager {
         let room_name = host.room_name.clone();
         let peer_id = host.peer_id.clone();
         let local_game_port = host.local_game_port;
-        let use_cloudflare = host.use_cloudflare;
         let expected_peers = host.expected_peers.clone();
         let relay_sessions = host.relay_sessions.clone();
         drop(session);
@@ -406,12 +351,7 @@ impl NetworkManager {
         self.mutate_status(|status| {
             status.state = ConnectionState::Punching;
             status.note = Some(format!(
-                "Пробиваю UDP до клиента {display_peer}. Игра слушается на 127.0.0.1:{local_game_port}. {}",
-                if use_cloudflare {
-                    "Дополнительный fallback разрешён для этой комнаты."
-                } else {
-                    "Используется стандартный direct профиль."
-                }
+                "Пробиваю UDP до клиента {display_peer}. Игра слушается на 127.0.0.1:{local_game_port}."
             ));
         })
         .await;
@@ -487,7 +427,7 @@ impl NetworkManager {
                         "tunnel_failed",
                         TunnelFailedEvent {
                             peer_addr: peer_addr.to_string(),
-                            reason: "РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕР±РёС‚СЊ NAT Рё СѓСЃС‚Р°РЅРѕРІРёС‚СЊ С‚СѓРЅРЅРµР»СЊ.".into(),
+                            reason: "Не удалось пробить NAT и установить туннель.".into(),
                         },
                     );
                     manager.mark_fatal(SessionMode::Client, None, &error).await;
@@ -507,9 +447,8 @@ impl NetworkManager {
         self.overwrite_status(NetworkStatus {
             mode: SessionMode::Client,
             state: ConnectionState::Starting,
-            transport_preference: Some("direct".into()),
             signaling_server: ABLY_SIGNAL_LABEL.into(),
-            note: Some("РџРѕРґРіРѕС‚Р°РІР»РёРІР°СЋ РєР»РёРµРЅС‚СЃРєРёР№ endpoint Рё РІС‹С‡РёСЃР»СЏСЋ РІРЅРµС€РЅРёР№ UDP Р°РґСЂРµСЃ.".into()),
+            note: Some("Подготавливаю клиентский endpoint и вычисляю внешний UDP адрес.".into()),
             logs: vec![format!("Client target: {peer_addr}")],
             ..Default::default()
         })
@@ -532,7 +471,6 @@ impl NetworkManager {
             state: ConnectionState::WaitingForPeer,
             udp_bind_addr: Some(udp_bind_addr.to_string()),
             public_udp_addr: Some(public_udp_addr.to_string()),
-            transport_preference: Some("direct".into()),
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             note: Some("Клиент готов. Отправляю handshake и жду ответ от хоста.".into()),
             peers: vec![PeerInfo {
@@ -574,15 +512,6 @@ impl NetworkManager {
             }
             Err(direct_error) => {
                 punch_handle.abort();
-                self.inner
-                    .diagnostics
-                    .set_direct_attempt(TransportAttempt {
-                        transport: "direct-quic".into(),
-                        success: false,
-                        detail: format!("{direct_error:#}"),
-                        endpoint: Some(peer_addr.to_string()),
-                    })
-                    .await;
                 self.push_log(format!(
                     "Direct QUIC path failed for {peer_addr}: {direct_error:#}"
                 ))
@@ -618,7 +547,6 @@ impl NetworkManager {
 
         self.mutate_status(|status| {
             status.state = ConnectionState::Connected;
-            status.transport_kind = TransportKind::DirectQuic;
             status.transport_path = Some("direct-quic".into());
             status.note = Some(
                 "Соединение установлено. Подключайтесь в Minecraft к localhost:25565.".into(),
@@ -632,19 +560,6 @@ impl NetworkManager {
         })
         .await;
         self.push_log("Локальный proxy на 127.0.0.1:25565 поднят.".into())
-            .await;
-        self.inner
-            .diagnostics
-            .set_direct_attempt(TransportAttempt {
-                transport: "direct-quic".into(),
-                success: true,
-                detail: "Direct QUIC tunnel established".into(),
-                endpoint: Some(peer_addr.to_string()),
-            })
-            .await;
-        self.inner
-            .diagnostics
-            .set_selected_transport("direct-quic")
             .await;
         let _ = app.emit(
             "tunnel_established",
@@ -716,7 +631,7 @@ impl NetworkManager {
                             )
                             .await;
                         manager
-                            .push_log(format!("Host РїСЂРёРЅСЏР» peer {peer_id} ({remote})"))
+                            .push_log(format!("Host принял peer {peer_id} ({remote})"))
                             .await;
 
                         let connection_cancel = cancel.clone();
@@ -771,7 +686,7 @@ impl NetworkManager {
                             {
                                 manager
                                     .set_nonfatal(format!(
-                                        "Р»РѕРєР°Р»СЊРЅС‹Р№ TCP->QUIC proxy Р·Р°РІРµСЂС€РёР»СЃСЏ РѕС€РёР±РєРѕР№: {error:#}"
+                                        "локальный TCP->QUIC proxy завершился ошибкой: {error:#}"
                                     ))
                                     .await;
                                 tracing::warn!("client proxy stream failed: {error:#}");
@@ -921,9 +836,7 @@ impl NetworkManager {
     ) -> Result<()> {
         self.mutate_status(|status| {
             status.state = ConnectionState::Connecting;
-            status.transport_kind = TransportKind::AblyRelay;
             status.transport_path = Some("ably-relay".into());
-            status.transport_preference.get_or_insert_with(|| "direct".into());
             status.note = Some(
                 "Прямой QUIC не поднялся. Перехожу на резервный relay-маршрут через Ably MQTT."
                     .into(),
@@ -941,7 +854,6 @@ impl NetworkManager {
 
         self.mutate_status(|status| {
             status.state = ConnectionState::Connected;
-            status.transport_kind = TransportKind::AblyRelay;
             status.transport_path = Some("ably-relay".into());
             status.note = Some(
                 "Соединение установлено через relay fallback. Подключайтесь в Minecraft к localhost:25565."
@@ -955,10 +867,6 @@ impl NetworkManager {
             }];
         })
         .await;
-        self.inner
-            .diagnostics
-            .set_selected_transport("ably-relay")
-            .await;
         self.push_log(format!(
             "Relay fallback ready for {peer_addr} via session {session_id}."
         ))
@@ -1063,7 +971,7 @@ impl NetworkManager {
 
         for attempt in 1..=CLIENT_CONNECT_RETRY_ATTEMPTS {
             if cancel.is_cancelled() {
-                return Err(anyhow!("РїРѕРґРєР»СЋС‡РµРЅРёРµ РѕС‚РјРµРЅРµРЅРѕ"));
+                return Err(anyhow!("подключение отменено"));
             }
 
             self.mutate_status(|status| {
@@ -1116,7 +1024,7 @@ impl NetworkManager {
                     }
                 }
                 SessionControl::Client(client) => {
-                    self.push_log(format!("РљР»РёРµРЅС‚СЃРєР°СЏ СЃРµСЃСЃРёСЏ СЃ {} РѕС‡РёС‰РµРЅР°.", client.peer_addr))
+                    self.push_log(format!("Клиентская сессия с {} очищена.", client.peer_addr))
                         .await;
                 }
             }
@@ -1207,7 +1115,7 @@ impl NetworkManager {
 
             if status.mode == SessionMode::Host {
                 status.state = ConnectionState::Hosting;
-                status.note = Some("РРіСЂРѕРє РѕС‚РєР»СЋС‡РёР»СЃСЏ, С…РѕСЃС‚ РѕСЃС‚Р°С‘С‚СЃСЏ Р°РєС‚РёРІРЅС‹Рј.".into());
+                status.note = Some("Игрок отключился, хост остаётся активным.".into());
             }
         })
         .await;
@@ -1235,12 +1143,10 @@ impl NetworkManager {
             room_code,
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             last_error: Some(formatted.clone()),
-            note: Some("РЎРµСЃСЃРёСЏ Р·Р°РІРµСЂС€РёР»Р°СЃСЊ СЃ РѕС€РёР±РєРѕР№.".into()),
+            note: Some("Сессия завершилась с ошибкой.".into()),
             logs: vec![formatted],
             ..Default::default()
         })
         .await;
     }
 }
-
-

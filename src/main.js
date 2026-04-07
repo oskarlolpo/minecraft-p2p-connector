@@ -1,7 +1,6 @@
-﻿import * as Ably from "ably";
+import * as Ably from "ably";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { I18N } from "./i18n.js";
 
@@ -12,29 +11,27 @@ const SAFE_RELEASE_STATES = new Set(["initialized", "detached", "failed"]);
 const SAFE_SKIP_STATES = new Set(["detached", "failed", "suspended"]);
 const SETTINGS_THEME_KEY = "minecraft-p2p-theme";
 const SETTINGS_LANGUAGE_KEY = "minecraft-p2p-language";
-const SETTINGS_PROFILE_KEY = "minecraft-p2p-profile";
 
 const modalEl = document.querySelector("#host-modal");
 const openHostModalEl = document.querySelector("#open-host-modal");
 const closeModalEl = document.querySelector("#close-modal");
 const closeModalSecondaryEl = document.querySelector("#close-modal-secondary");
 const requirePasswordEl = document.querySelector("#require-password");
-const useYggstackEl = document.querySelector("#use-yggstack");
 const passwordFieldGroupEl = document.querySelector("#password-field-group");
 const roomNameEl = document.querySelector("#room-name");
 const roomPasswordEl = document.querySelector("#room-password");
 const localGamePortEl = document.querySelector("#local-game-port");
+const autoDetectPortEl = document.querySelector("#auto-detect-port");
+const enableGeyserEl = document.querySelector("#enable-geyser");
+const geyserPortFieldEl = document.querySelector("#geyser-port-field");
+const geyserPortEl = document.querySelector("#geyser-port");
 const hostButtonEl = document.querySelector("#host-button");
 const stopButtonEl = document.querySelector("#stop-button");
 const refreshLobbyEl = document.querySelector("#refresh-lobby");
 const copyLogsEl = document.querySelector("#copy-logs");
 const copyDiagnosticsEl = document.querySelector("#copy-diagnostics");
-const yggstackStatusEl = document.querySelector("#yggstack-status");
-const prepareYggstackEl = document.querySelector("#prepare-yggstack");
-const startYggstackEl = document.querySelector("#start-yggstack");
-const retryYggstackEl = document.querySelector("#retry-yggstack");
-const stopYggstackEl = document.querySelector("#stop-yggstack");
 const copySelectedEndpointEl = document.querySelector("#copy-selected-endpoint");
+const copySelectedBedrockEndpointEl = document.querySelector("#copy-selected-bedrock-endpoint");
 const connectSelectedEl = document.querySelector("#connect-selected");
 const runPreflightEl = document.querySelector("#run-preflight");
 const startTestServerEl = document.querySelector("#start-test-server");
@@ -50,6 +47,7 @@ const lobbyCountEl = document.querySelector("#lobby-count");
 const publicEndpointEl = document.querySelector("#public-endpoint");
 const selectedServerEl = document.querySelector("#selected-server");
 const selectedEndpointEl = document.querySelector("#selected-endpoint");
+const selectedBedrockEndpointEl = document.querySelector("#selected-bedrock-endpoint");
 const selectedMetaEl = document.querySelector("#selected-meta");
 const statusNoteEl = document.querySelector("#status-note");
 const peerCountEl = document.querySelector("#peer-count");
@@ -64,32 +62,8 @@ const navSettingsEl = document.querySelector("#nav-settings");
 const pageHomeEl = document.querySelector("#page-home");
 const pageSettingsEl = document.querySelector("#page-settings");
 const portHelpEl = document.querySelector("#port-help");
-const hideOverlayButtonEl = document.querySelector("#hide-overlay-button");
-const overlayCloseButtonEl = document.querySelector("#overlay-close-button");
-const overlayTopbarEl = document.querySelector("#overlay-topbar");
-const openProfileModalEl = document.querySelector("#open-profile-modal");
-const overlayShortcutChipEl = document.querySelector("#overlay-shortcut-chip");
-const overlayStatusLineEl = document.querySelector("#overlay-status-line");
-const topbarProfileAvatarEl = document.querySelector("#topbar-profile-avatar");
-const topbarProfileNameEl = document.querySelector("#topbar-profile-name");
-const settingsNicknameEl = document.querySelector("#settings-nickname");
-const settingsAvatarInputEl = document.querySelector("#settings-avatar-input");
-const settingsAvatarPreviewEl = document.querySelector("#settings-avatar-preview");
-const settingsProfileNameEl = document.querySelector("#settings-profile-name");
-const settingsProfileSubtitleEl = document.querySelector("#settings-profile-subtitle");
-const settingsShortcutInputEl = document.querySelector("#settings-shortcut-input");
-const saveProfileButtonEl = document.querySelector("#save-profile-button");
-const clearAvatarButtonEl = document.querySelector("#clear-avatar-button");
-const profileModalEl = document.querySelector("#profile-modal");
-const closeProfileModalEl = document.querySelector("#close-profile-modal");
-const closeProfileModalSecondaryEl = document.querySelector("#close-profile-modal-secondary");
-const saveProfileModalEl = document.querySelector("#save-profile-modal");
-const profileNicknameInputEl = document.querySelector("#profile-nickname-input");
-const profileAvatarInputEl = document.querySelector("#profile-avatar-input");
-const profileShortcutInputEl = document.querySelector("#profile-shortcut-input");
-const profileAvatarPreviewEl = document.querySelector("#profile-avatar-preview");
-
-const appWindow = getCurrentWindow();
+const sidebarClientIdEl = document.querySelector("#sidebar-client-id");
+const settingsClientIdEl = document.querySelector("#settings-client-id");
 
 const hostSession = {
   active: false,
@@ -102,10 +76,6 @@ const hostSession = {
   minecraftVersion: null,
   presencePayload: null,
   presenceEntered: false,
-  yggEnabled: false,
-  yggAddress: null,
-  yggPublicKey: null,
-  yggSubnet: null,
 };
 
 const localClientId = ensureClientId();
@@ -120,15 +90,12 @@ const state = {
   syncingPresence: false,
   pendingConnects: new Set(),
   pendingKicks: new Set(),
-  pendingTransportFlow: null,
   tunnelReady: false,
   activeTunnelTransport: null,
   lastPreflight: null,
   testServerInfo: null,
-  yggstackInfo: null,
   page: "home",
   preferences: loadPreferences(),
-  shortcutCapture: null,
 };
 
 function ensureClientId() {
@@ -141,24 +108,10 @@ function ensureClientId() {
 }
 
 function loadPreferences() {
-  const storedProfile = safeParseJson(localStorage.getItem(SETTINGS_PROFILE_KEY));
   return {
     theme: localStorage.getItem(SETTINGS_THEME_KEY) || "oled",
     language: localStorage.getItem(SETTINGS_LANGUAGE_KEY) || "ru",
-    profile: {
-      nickname: storedProfile?.nickname || "",
-      avatarDataUrl: storedProfile?.avatarDataUrl || null,
-      overlayShortcut: storedProfile?.overlayShortcut || "SHIFT+TAB",
-    },
   };
-}
-
-function safeParseJson(value) {
-  try {
-    return value ? JSON.parse(value) : null;
-  } catch {
-    return null;
-  }
 }
 
 function savePreference(key, value) {
@@ -180,335 +133,6 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function saveProfile() {
-  localStorage.setItem(
-    SETTINGS_PROFILE_KEY,
-    JSON.stringify(state.preferences.profile),
-  );
-}
-
-function currentNickname() {
-  return state.preferences.profile.nickname?.trim() || localClientId;
-}
-
-function activeProfileNicknameDraft() {
-  const active = document.activeElement;
-  if (active === settingsNicknameEl || active === profileNicknameInputEl) {
-    return active.value?.trim() || "";
-  }
-  return "";
-}
-
-function setInputValueUnlessFocused(element, value) {
-  if (!element || document.activeElement === element) return;
-  element.value = value;
-}
-
-function normalizedShortcut(value) {
-  return String(value || "SHIFT+TAB")
-    .trim()
-    .replace(/\s+/g, "")
-    .toUpperCase();
-}
-
-function shortcutMainKeyFromEvent(event) {
-  const { code, key } = event;
-  if (["ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight", "AltLeft", "AltRight", "MetaLeft", "MetaRight"].includes(code)) {
-    return null;
-  }
-  if (code.startsWith("Key")) return code.slice(3).toUpperCase();
-  if (code.startsWith("Digit")) return code.slice(5);
-  if (code.startsWith("Numpad")) return code.slice(6).toUpperCase();
-  if (/^F\d+$/.test(code)) return code.toUpperCase();
-
-  const aliases = {
-    Space: "SPACE",
-    Tab: "TAB",
-    Enter: "ENTER",
-    Escape: "ESC",
-    Backspace: "BACKSPACE",
-    Delete: "DELETE",
-    Insert: "INSERT",
-    Home: "HOME",
-    End: "END",
-    PageUp: "PAGEUP",
-    PageDown: "PAGEDOWN",
-    ArrowUp: "UP",
-    ArrowDown: "DOWN",
-    ArrowLeft: "LEFT",
-    ArrowRight: "RIGHT",
-    Minus: "-",
-    Equal: "=",
-    BracketLeft: "[",
-    BracketRight: "]",
-    Backslash: "\\",
-    Semicolon: ";",
-    Quote: "'",
-    Comma: ",",
-    Period: ".",
-    Slash: "/",
-    Backquote: "`",
-  };
-
-  if (aliases[code]) return aliases[code];
-
-  return key?.length === 1 ? key.toUpperCase() : key?.toUpperCase() || null;
-}
-
-function shortcutFromKeyboardEvent(event) {
-  const mainKey = shortcutMainKeyFromEvent(event);
-  if (!mainKey) return null;
-
-  const parts = [];
-  if (event.ctrlKey) parts.push("CTRL");
-  if (event.altKey) parts.push("ALT");
-  if (event.shiftKey) parts.push("SHIFT");
-  if (event.metaKey) parts.push("META");
-  parts.push(mainKey);
-
-  return normalizedShortcut(parts.join("+"));
-}
-
-function renderShortcutCaptureState() {
-  const active = Boolean(state.shortcutCapture);
-  overlayShortcutChipEl?.classList.toggle("capturing", active);
-  if (overlayShortcutChipEl) {
-    overlayShortcutChipEl.textContent = active
-      ? "РќР°Р¶РјРёС‚Рµ РєР»Р°РІРёС€Сѓ"
-      : normalizedShortcut(state.preferences.profile.overlayShortcut);
-  }
-}
-
-async function persistOverlayShortcut(shortcut) {
-  const normalized = normalizedShortcut(shortcut);
-  state.preferences.profile.overlayShortcut = normalized;
-  saveProfile();
-  await invoke("save_user_profile", {
-    profile: {
-      nickname: state.preferences.profile.nickname ?? "",
-      avatarDataUrl: state.preferences.profile.avatarDataUrl,
-      theme: state.preferences.theme,
-      language: state.preferences.language,
-      overlayShortcut: normalized,
-    },
-  });
-  syncProfileSurface();
-  rerender();
-  addLog(`Р“РѕСЂСЏС‡Р°СЏ РєР»Р°РІРёС€Р° overlay РёР·РјРµРЅРµРЅР°: ${normalized}.`);
-}
-
-function startShortcutCapture(source = "chip") {
-  state.shortcutCapture = { source };
-  renderShortcutCaptureState();
-}
-
-function stopShortcutCapture() {
-  state.shortcutCapture = null;
-  renderShortcutCaptureState();
-  syncProfileSurface();
-}
-
-function avatarMarkup(label = currentNickname(), avatarDataUrl = state.preferences.profile.avatarDataUrl) {
-  if (avatarDataUrl) {
-    return `<img class="host-avatar-image" src="${avatarDataUrl}" alt="${escapeHtml(label)}" />`;
-  }
-  const initials = String(label || "MC")
-    .replace(/В§.|&./g, "")
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
-    .join("") || "MC";
-  return `<span>${escapeHtml(initials)}</span>`;
-}
-
-const MINECRAFT_COLOR_MAP = {
-  0: "#000000",
-  1: "#0000aa",
-  2: "#00aa00",
-  3: "#00aaaa",
-  4: "#aa0000",
-  5: "#aa00aa",
-  6: "#ffaa00",
-  7: "#aaaaaa",
-  8: "#555555",
-  9: "#5555ff",
-  a: "#55ff55",
-  b: "#55ffff",
-  c: "#ff5555",
-  d: "#ff55ff",
-  e: "#ffff55",
-  f: "#ffffff",
-};
-
-function renderMinecraftFormattedText(raw) {
-  const value = String(raw ?? "");
-  const fragments = [];
-  let style = { color: null, bold: false, italic: false, underline: false, strike: false };
-  let buffer = "";
-
-  function flush() {
-    if (!buffer) return;
-    const rules = [];
-    if (style.color) rules.push(`color:${style.color}`);
-    if (style.bold) rules.push("font-weight:800");
-    if (style.italic) rules.push("font-style:italic");
-    if (style.underline || style.strike) {
-      rules.push(
-        `text-decoration:${[style.underline ? "underline" : null, style.strike ? "line-through" : null]
-          .filter(Boolean)
-          .join(" ")}`,
-      );
-    }
-    fragments.push(
-      `<span${rules.length ? ` style="${rules.join(";")}"` : ""}>${escapeHtml(buffer)}</span>`,
-    );
-    buffer = "";
-  }
-
-  for (let index = 0; index < value.length; index += 1) {
-    const symbol = value[index];
-    const next = value[index + 1]?.toLowerCase();
-    if ((symbol === "В§" || symbol === "&") && next) {
-      flush();
-      if (MINECRAFT_COLOR_MAP[next]) {
-        style = { color: MINECRAFT_COLOR_MAP[next], bold: false, italic: false, underline: false, strike: false };
-      } else if (next === "l") {
-        style.bold = true;
-      } else if (next === "o") {
-        style.italic = true;
-      } else if (next === "n") {
-        style.underline = true;
-      } else if (next === "m") {
-        style.strike = true;
-      } else if (next === "r") {
-        style = { color: null, bold: false, italic: false, underline: false, strike: false };
-      }
-      index += 1;
-      continue;
-    }
-    buffer += symbol;
-  }
-  flush();
-  return fragments.join("") || escapeHtml(value);
-}
-
-function renderAvatarTarget(element, label = currentNickname(), avatarDataUrl = state.preferences.profile.avatarDataUrl) {
-  if (!element) return;
-  element.innerHTML = avatarMarkup(label, avatarDataUrl);
-}
-
-function syncProfileSurface() {
-  const nickname = activeProfileNicknameDraft() || currentNickname();
-  const shortcut = normalizedShortcut(state.preferences.profile.overlayShortcut);
-  state.preferences.profile.overlayShortcut = shortcut;
-  if (overlayShortcutChipEl && !state.shortcutCapture) overlayShortcutChipEl.textContent = shortcut;
-  if (topbarProfileNameEl) topbarProfileNameEl.textContent = nickname;
-  if (settingsProfileNameEl) settingsProfileNameEl.textContent = nickname;
-  if (settingsProfileSubtitleEl) {
-    settingsProfileSubtitleEl.textContent = `РћРІРµСЂР»РµР№ РѕС‚РєСЂС‹РІР°РµС‚СЃСЏ РїРѕ ${shortcut}.`;
-  }
-  setInputValueUnlessFocused(settingsNicknameEl, state.preferences.profile.nickname ?? "");
-  setInputValueUnlessFocused(settingsShortcutInputEl, shortcut);
-  setInputValueUnlessFocused(profileNicknameInputEl, state.preferences.profile.nickname ?? "");
-  setInputValueUnlessFocused(profileShortcutInputEl, shortcut);
-  renderAvatarTarget(topbarProfileAvatarEl, nickname);
-  renderAvatarTarget(settingsAvatarPreviewEl, nickname);
-  renderAvatarTarget(profileAvatarPreviewEl, nickname);
-}
-
-async function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕС‡РёС‚Р°С‚СЊ С„Р°Р№Р» Р°РІР°С‚Р°СЂР°."));
-    reader.onload = () => resolve(String(reader.result ?? ""));
-    reader.readAsDataURL(file);
-  });
-}
-
-async function buildProfilePayload(nicknameEl, shortcutEl, avatarInputEl) {
-  const nickname = nicknameEl?.value?.trim() || "";
-  const overlayShortcut = normalizedShortcut(shortcutEl?.value || "SHIFT+TAB");
-  let avatarDataUrl = state.preferences.profile.avatarDataUrl ?? null;
-  const file = avatarInputEl?.files?.[0];
-  if (file) {
-    avatarDataUrl = await fileToDataUrl(file);
-  }
-  return {
-    nickname,
-    avatarDataUrl,
-    overlayShortcut,
-    theme: state.preferences.theme,
-    language: state.preferences.language,
-  };
-}
-
-function openProfileModal(required = false) {
-  profileModalEl?.classList.remove("hidden");
-  profileModalEl?.setAttribute("aria-hidden", "false");
-  if (profileModalEl) profileModalEl.dataset.required = required ? "true" : "false";
-  setTimeout(() => profileNicknameInputEl?.focus(), 40);
-}
-
-function closeProfileModal() {
-  if (profileModalEl?.dataset.required === "true" && !state.preferences.profile.nickname?.trim()) {
-    return;
-  }
-  profileModalEl?.classList.add("hidden");
-  profileModalEl?.setAttribute("aria-hidden", "true");
-}
-
-async function persistProfileFromFields(nicknameEl, shortcutEl, avatarInputEl, { closeAfter = false } = {}) {
-  const payload = await buildProfilePayload(nicknameEl, shortcutEl, avatarInputEl);
-  if (!payload.nickname) {
-    nicknameEl?.focus();
-    return;
-  }
-
-  state.preferences.profile.nickname = payload.nickname;
-  state.preferences.profile.avatarDataUrl = payload.avatarDataUrl;
-  state.preferences.profile.overlayShortcut = payload.overlayShortcut;
-  saveProfile();
-
-  await invoke("save_user_profile", {
-    profile: {
-      nickname: payload.nickname,
-      avatarDataUrl: payload.avatarDataUrl,
-      theme: state.preferences.theme,
-      language: state.preferences.language,
-      overlayShortcut: payload.overlayShortcut,
-    },
-  });
-
-  if (settingsAvatarInputEl) settingsAvatarInputEl.value = "";
-  if (profileAvatarInputEl) profileAvatarInputEl.value = "";
-  syncProfileSurface();
-  rerender();
-  addLog(`РџСЂРѕС„РёР»СЊ СЃРѕС…СЂР°РЅС‘РЅ. Overlay shortcut: ${payload.overlayShortcut}.`);
-  if (closeAfter) closeProfileModal();
-}
-
-async function hydrateProfile() {
-  try {
-    const profile = await invoke("get_user_profile");
-    if (profile?.nickname) state.preferences.profile.nickname = profile.nickname;
-    if (profile?.avatarDataUrl) state.preferences.profile.avatarDataUrl = profile.avatarDataUrl;
-    if (profile?.overlayShortcut) state.preferences.profile.overlayShortcut = profile.overlayShortcut;
-    if (profile?.theme) state.preferences.theme = profile.theme;
-    if (profile?.language) state.preferences.language = profile.language;
-  } catch (error) {
-    addLog(`РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РїСЂРѕС„РёР»СЊ РёР· backend: ${String(error)}`);
-  }
-
-  document.body.dataset.theme = state.preferences.theme;
-  saveProfile();
-  syncProfileSurface();
-
-  if (!state.preferences.profile.nickname?.trim()) {
-    openProfileModal(true);
-  }
-}
-
 function applyTranslations() {
   document.title = t("appTitle");
   document.querySelectorAll("[data-i18n]").forEach((element) => {
@@ -524,6 +148,23 @@ function applyTranslations() {
   closeModalEl.setAttribute("aria-label", t("closeAria"));
   portHelpEl.title = t("portHelpTitle");
   document.documentElement.lang = state.preferences.language;
+}
+
+function syncGeyserField() {
+  geyserPortFieldEl.classList.toggle("hidden", !enableGeyserEl.checked);
+}
+
+async function autoDetectLocalGamePort() {
+  try {
+    autoDetectPortEl.disabled = true;
+    const detection = await invoke("detect_lan_port");
+    localGamePortEl.value = String(detection.port);
+    addLog(`Auto port: найден LAN-порт ${detection.port} из ${detection.sourcePath}`);
+  } catch (error) {
+    addLog(`Не удалось автоматически определить LAN-порт: ${String(error)}`);
+  } finally {
+    autoDetectPortEl.disabled = false;
+  }
 }
 
 function renderSettingsOptions() {
@@ -546,7 +187,6 @@ function applyLanguage(language) {
   state.preferences.language = language;
   savePreference(SETTINGS_LANGUAGE_KEY, language);
   applyTranslations();
-  syncProfileSurface();
   rerender();
 }
 
@@ -634,12 +274,10 @@ function formatMode(mode) {
 }
 
 function formatTransportLabel(transport) {
-  if (transport === "yggstack" || transport === "yggstack-host") return "Yggstack";
-  if (transport === "ably-relay") return "Ably MQTT relay";
   if (transport === "relay-circuit" || transport === "relay-reservation") return "Circuit Relay v2";
   if (transport === "direct-hole-punch") return "DCUtR hole punch";
-  if (transport === "direct" || transport === "direct-quic") return "Direct QUIC";
-  return transport ?? "РЅРµРёР·РІРµСЃС‚РЅС‹Р№ С‚СЂР°РЅСЃРїРѕСЂС‚";
+  if (transport === "direct" || transport === "direct-quic") return "Direct libp2p";
+  return transport ?? "неизвестный транспорт";
 }
 
 function getSelectedServer() {
@@ -706,38 +344,62 @@ function advertisedEndpoint(addrs, explicitEndpoint = null) {
   return normalizeToMultiaddr(explicitEndpoint) ?? addrs.find((addr) => isLikelyPublicEndpoint(addr)) ?? addrs[0] ?? null;
 }
 
+function toSocketEndpoint(value) {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+  if (!trimmed.startsWith("/")) return trimmed;
+  const normalized = normalizeToMultiaddr(trimmed);
+  if (!normalized?.startsWith("/")) return normalized;
+  const parts = normalized.split("/");
+  if (parts.length >= 5 && parts[1] === "ip4" && parts[3] === "tcp") {
+    return `${parts[2]}:${parts[4]}`;
+  }
+  if (parts.length >= 5 && parts[1] === "ip6" && parts[3] === "tcp") {
+    return `[${parts[2]}]:${parts[4]}`;
+  }
+  if (parts.length >= 5 && parts[1] === "dns4" && parts[3] === "tcp") {
+    return `${parts[2]}:${parts[4]}`;
+  }
+  return trimmed;
+}
+
+function deriveBedrockEndpoint(endpoint, bedrockPort) {
+  if (!endpoint || !bedrockPort) return null;
+  const socket = toSocketEndpoint(endpoint);
+  if (!socket) return null;
+  const match = socket.match(/^\[([^\]]+)\]:(\d+)$/);
+  if (match) {
+    return `[${match[1]}]:${bedrockPort}`;
+  }
+  const separator = socket.lastIndexOf(":");
+  if (separator <= 0) return null;
+  return `${socket.slice(0, separator)}:${bedrockPort}`;
+}
+
 function canAdvertiseHost() {
   return Boolean(hostSession.active && hostSession.peerId && advertisedEndpoint(hostSession.listenAddrs, hostSession.peerAddr));
 }
 
 function renderSelectedServer() {
   const selected = getSelectedServer();
-  selectedServerEl.innerHTML = selected ? renderMinecraftFormattedText(selected.roomName) : escapeHtml(t("noSelection"));
+  const bedrockEndpoint =
+    selected?.bedrockEndpoint ?? (selected ? deriveBedrockEndpoint(selected.peerAddr, selected.bedrockPort) : null);
+  selectedServerEl.textContent = selected ? selected.roomName : t("noSelection");
   selectedEndpointEl.textContent = selected?.peerAddr ?? "n/a";
+  selectedBedrockEndpointEl.textContent = bedrockEndpoint ?? "n/a";
   selectedMetaEl.textContent = selected
     ? t("selectedMetaTemplate", {
-        host: `${selected.hostName}${selected.clientId === localClientId ? " (you)" : ""} В· ${selected.peerId}`,
+        host: `${selected.hostName}${selected.clientId === localClientId ? ` (${t("selfHostLabel")})` : ""} · ${selected.peerId}`,
         version: selected.minecraftVersion ?? t("serverUnknownVersion"),
         slots: selected.slots,
-        password: `${selected.hasPassword ? t("selectedMetaPassword") : ""}${selected.yggReady ? " В· Yggstack" : ""}`,
+        password: selected.hasPassword ? t("selectedMetaPassword") : "",
+        bedrock:
+          selected.geyserEnabled && bedrockEndpoint
+            ? t("selectedMetaBedrock", { endpoint: bedrockEndpoint })
+            : "",
       })
     : t("selectedMetaEmpty");
-}
-
-function renderYggstackRuntimeLegacy(info) {
-  state.yggstackInfo = info ?? null;
-  if (!yggstackStatusEl) return;
-  if (!info) {
-    yggstackStatusEl.textContent = "Yggstack: runtime РµС‰С‘ РЅРµ РїСЂРѕРІРµСЂРµРЅ.";
-    return;
-  }
-
-  const stateLabel = info.running ? "sidecar Р·Р°РїСѓС‰РµРЅ" : info.ready ? "runtime РіРѕС‚РѕРІ" : "runtime РЅРµ РіРѕС‚РѕРІ";
-  yggstackStatusEl.textContent = `Yggstack: ${stateLabel}. ${info.note ?? ""}`.trim();
-}
-
-function renderYggstackRuntime(info) {
-  renderYggstackRuntimeLegacy(info);
 }
 
 function syncButtons() {
@@ -765,6 +427,7 @@ function syncButtons() {
     ? t("connectBusyButton")
     : t("connectButton");
   copySelectedEndpointEl.disabled = !selected?.peerAddr;
+  copySelectedBedrockEndpointEl.disabled = !deriveBedrockEndpoint(selected?.peerAddr, selected?.bedrockPort);
   hostLockNoteEl.textContent = clientLocked
     ? t("hostNoteClientLocked")
     : mode === "host"
@@ -778,13 +441,14 @@ function renderSessionCard() {
   const status = state.status;
   const mode = status?.mode ?? "idle";
   const version = status?.minecraftVersion ?? hostSession.minecraftVersion ?? t("serverUnknownVersion");
+  const hostBedrockEndpoint = deriveBedrockEndpoint(status?.publicUdpAddr, status?.bedrockPort);
 
   if (mode === "client") {
     hostSectionTitleEl.textContent = t("clientSessionTitle");
     activeHostCardEl.className = "active-host-card";
     activeHostCardEl.innerHTML = `
       <div class="active-host-layout">
-        <div class="host-avatar">в‡„</div>
+        <div class="host-avatar">⇄</div>
         <div class="host-details">
           <h3>${escapeHtml(t("clientCardTitle"))}</h3>
           <p>${escapeHtml(t("clientCardDescription", { peer: status?.peers?.[0]?.addr ?? "n/a" }))}</p>
@@ -803,7 +467,7 @@ function renderSessionCard() {
     activeHostCardEl.className = "active-host-card empty";
     activeHostCardEl.innerHTML = `
       <div class="active-host-layout">
-        <div class="host-avatar">${avatarMarkup(hostSession.roomName)}</div>
+        <div class="host-avatar">MC</div>
         <div class="host-details">
           <h3>${escapeHtml(t("hostEmptyTitle"))}</h3>
           <p>${escapeHtml(t("hostEmptyDescription"))}</p>
@@ -816,14 +480,19 @@ function renderSessionCard() {
   activeHostCardEl.className = "active-host-card";
   activeHostCardEl.innerHTML = `
     <div class="active-host-layout">
-      <div class="host-avatar">${avatarMarkup(hostSession.roomName)}</div>
+      <div class="host-avatar">MC</div>
       <div class="host-details">
-        <h3>${renderMinecraftFormattedText(hostSession.roomName)}</h3>
+        <h3>${escapeHtml(hostSession.roomName)}</h3>
         <p>${escapeHtml(t("hostCardPlayers", { count: status?.peerCount ?? 0 }))}</p>
         <div class="host-meta-row">
           <span class="host-meta-pill">${escapeHtml(t("hostCardVersion", { version }))}</span>
           <span class="host-meta-pill">${escapeHtml(t("hostCardPort", { port: hostSession.localPort }))}</span>
           <span class="host-meta-pill">${escapeHtml(hostSession.hasPassword ? t("hostCardPasswordOn") : t("hostCardPasswordOff"))}</span>
+          ${
+            status?.geyserEnabled && hostBedrockEndpoint
+              ? `<span class="host-meta-pill">${escapeHtml(t("hostCardGeyser", { endpoint: hostBedrockEndpoint }))}</span>`
+              : ""
+          }
         </div>
       </div>
     </div>
@@ -852,7 +521,7 @@ function renderPeers(peers) {
           <div class="player-main">
             <strong>${escapeHtml(peer.peerId)}</strong>
             <span>${escapeHtml(peer.addr)}</span>
-            <span>${peer.connected ? "online" : "pending"} В· ${peer.pingMs == null ? "n/a" : `${peer.pingMs} ms`}</span>
+            <span>${peer.connected ? "online" : "pending"} · ${peer.pingMs == null ? "n/a" : `${peer.pingMs} ms`}</span>
           </div>
           <div class="player-actions">
             ${
@@ -888,10 +557,11 @@ function renderServers() {
         <article class="server-row ${isSelected ? "active" : ""}" data-select-server="${escapeHtml(server.clientId)}">
           <div class="server-main">
             <div class="server-main-top">
-              <strong class="minecraft-name">${renderMinecraftFormattedText(server.roomName)}</strong>
-              <span class="row-chip">${server.yggReady ? "YGG" : server.hasPassword ? "рџ”’" : "вљ”"}</span>
+              <strong>${escapeHtml(server.roomName)}</strong>
+              <span class="row-chip">${escapeHtml(server.hasPassword ? t("serverLockedChip") : t("serverOpenChip"))}</span>
+              ${server.geyserEnabled && server.bedrockPort ? `<span class="row-chip">Bedrock ${escapeHtml(String(server.bedrockPort))}</span>` : ""}
             </div>
-            <span>${escapeHtml(server.hostName)}${isLocal ? ` В· ${escapeHtml(t("selfHostLabel"))}` : ""}</span>
+            <span>${escapeHtml(server.hostName)}${isLocal ? ` · ${escapeHtml(t("selfHostLabel"))}` : ""}</span>
           </div>
           <div class="server-main">
             <strong>${escapeHtml(server.minecraftVersion ?? t("serverUnknownVersion"))}</strong>
@@ -937,11 +607,9 @@ function hydrateServers(members) {
         localPort: data.local_port ?? 25565,
         minecraftVersion: data.minecraft_version ?? null,
         transport: data.transport ?? null,
-        transportPreference: data.transport_preference ?? (data.ygg_ready ? "yggstack" : "direct"),
-        yggReady: Boolean(data.ygg_ready),
-        yggAddress: data.ygg_address ?? null,
-        yggPublicKey: data.ygg_public_key ?? null,
-        yggSubnet: data.ygg_subnet ?? null,
+        geyserEnabled: Boolean(data.geyser_enabled),
+        bedrockPort: data.bedrock_port ?? null,
+        bedrockEndpoint: data.bedrock_endpoint ?? null,
       };
     })
     .filter((server) => Boolean(server.peerId) && (server.peerAddrs.length > 0 || Boolean(server.peerAddr)));
@@ -957,24 +625,23 @@ function hydrateServers(members) {
 
 function buildPresencePayload(status) {
   const endpoint = advertisedEndpoint(hostSession.listenAddrs, hostSession.peerAddr);
+  const socketEndpoint = toSocketEndpoint(endpoint);
   return {
     room_name: hostSession.roomName,
-    host_name: currentNickname(),
+    host_name: localClientId,
     slots: `${Math.max(1, (status?.peerCount ?? 0) + 1)}/30`,
     has_password: hostSession.hasPassword,
     peer_id: hostSession.peerId ?? localClientId,
     listen_addrs: hostSession.listenAddrs,
     endpoint,
+    socket_endpoint: socketEndpoint,
     peer_addr: hostSession.peerAddr,
     local_port: hostSession.localPort,
     minecraft_version: hostSession.minecraftVersion ?? status?.minecraftVersion ?? null,
     transport: status?.transportPath ?? state.activeTunnelTransport ?? null,
-    transport_preference: hostSession.yggEnabled ? "yggstack" : "direct",
-    ygg_ready: Boolean(hostSession.yggEnabled && hostSession.yggAddress),
-    ygg_address: hostSession.yggAddress ?? null,
-    ygg_endpoint: hostSession.yggAddress ? `/ip6/${hostSession.yggAddress}/tcp/25565` : null,
-    ygg_public_key: hostSession.yggPublicKey ?? null,
-    ygg_subnet: hostSession.yggSubnet ?? null,
+    geyser_enabled: Boolean(status?.geyserEnabled),
+    bedrock_port: status?.bedrockPort ?? null,
+    bedrock_endpoint: deriveBedrockEndpoint(socketEndpoint, status?.bedrockPort ?? null),
   };
 }
 
@@ -1030,15 +697,6 @@ function renderStatus(status) {
   renderLogs();
   renderSelectedServer();
   updateHintFromStatus(status);
-  if (overlayStatusLineEl) {
-    overlayStatusLineEl.textContent =
-      status.mode === "client" && state.tunnelReady
-        ? `РўСѓРЅРЅРµР»СЊ Р°РєС‚РёРІРµРЅ: ${formatTransportLabel(status.transportPath ?? state.activeTunnelTransport)}. РџРѕРґРєР»СЋС‡Р°Р№С‚РµСЃСЊ Рє localhost:25565.`
-        : status.mode === "host"
-          ? `РљРѕРјРЅР°С‚Р° ${status.roomCode ?? "Р±РµР· РёРјРµРЅРё"} РѕРїСѓР±Р»РёРєРѕРІР°РЅР°. Р–РґС‘Рј РїРѕРґРєР»СЋС‡РµРЅРёСЏ РёРіСЂРѕРєРѕРІ.`
-          : `РћРІРµСЂР»РµР№ СЃРєСЂС‹С‚ РІ С‚СЂРµРµ. РћС‚РєСЂС‹РІР°Р№С‚Рµ РµРіРѕ РїРѕ ${normalizedShortcut(state.preferences.profile.overlayShortcut)}.`;
-  }
-  syncProfileSurface();
   syncButtons();
 }
 
@@ -1111,7 +769,6 @@ async function bindChannelHandlers() {
         addLog(`Punch error: ${String(error)}`);
       }
     });
-
     state.privateChannel.__mcp2pHandshakeBound = true;
   }
 }
@@ -1207,8 +864,8 @@ async function runPreflightCheck({ silent = false } = {}) {
 
   if (!silent) {
     addLog(
-      `Preflight ${report.reachable ? "OK" : "FAIL"} РґР»СЏ 127.0.0.1:${report.localPort}. ${
-        report.minecraftVersion ? `Р’РµСЂСЃРёСЏ: ${report.minecraftVersion}.` : "Р’РµСЂСЃРёСЏ РЅРµ РѕРїСЂРµРґРµР»РёР»Р°СЃСЊ."
+      `Preflight ${report.reachable ? "OK" : "FAIL"} для 127.0.0.1:${report.localPort}. ${
+        report.minecraftVersion ? `Версия: ${report.minecraftVersion}.` : "Версия не определилась."
       }`,
     );
     addLog(report.recommendedHostAction);
@@ -1221,15 +878,15 @@ async function runPreflightCheck({ silent = false } = {}) {
 async function startEmbeddedTestServer() {
   const port = Number(testServerPortEl.value || 25566);
   if (port === Number(localGamePortEl.value || 25565)) {
-    addLog("Р”РёР°РіРЅРѕСЃС‚РёС‡РµСЃРєРёР№ СЃРµСЂРІРµСЂ РЅРµР»СЊР·СЏ Р·Р°РїСѓСЃРєР°С‚СЊ РЅР° С‚РѕРј Р¶Рµ РїРѕСЂС‚Сѓ, С‡С‚Рѕ Рё Minecraft. РСЃРїРѕР»СЊР·СѓР№С‚Рµ РѕС‚РґРµР»СЊРЅС‹Р№ РїРѕСЂС‚, РЅР°РїСЂРёРјРµСЂ 25566.");
+    addLog("Диагностический сервер нельзя запускать на том же порту, что и Minecraft. Используйте отдельный порт, например 25566.");
     return;
   }
   try {
     const info = await invoke("start_test_server", { port });
     state.testServerInfo = info;
-    addLog(`РўРµСЃС‚РѕРІС‹Р№ СЃРµСЂРІРµСЂ Р·Р°РїСѓС‰РµРЅ РЅР° ${info.bindAddr}. РџСЂРѕС‚РѕРєРѕР»: ${info.protocol}.`);
+    addLog(`Тестовый сервер запущен на ${info.bindAddr}. Протокол: ${info.protocol}.`);
   } catch (error) {
-    addLog(`РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїСѓСЃС‚РёС‚СЊ С‚РµСЃС‚РѕРІС‹Р№ СЃРµСЂРІРµСЂ: ${String(error)}`);
+    addLog(`Не удалось запустить тестовый сервер: ${String(error)}`);
   }
 }
 
@@ -1237,44 +894,35 @@ async function stopEmbeddedTestServer() {
   try {
     await invoke("stop_test_server");
     state.testServerInfo = null;
-    addLog("РўРµСЃС‚РѕРІС‹Р№ СЃРµСЂРІРµСЂ РѕСЃС‚Р°РЅРѕРІР»РµРЅ.");
+    addLog("Тестовый сервер остановлен.");
   } catch (error) {
-    addLog(`РќРµ СѓРґР°Р»РѕСЃСЊ РѕСЃС‚Р°РЅРѕРІРёС‚СЊ С‚РµСЃС‚РѕРІС‹Р№ СЃРµСЂРІРµСЂ: ${String(error)}`);
+    addLog(`Не удалось остановить тестовый сервер: ${String(error)}`);
   }
 }
 
 async function copyDiagnosticsSnapshot() {
   try {
     const localPort = Number(localGamePortEl.value || 25565);
-    await invoke("run_network_self_check_command");
     const snapshot = await invoke("export_diagnostics_snapshot", { localPort });
     await navigator.clipboard.writeText(JSON.stringify(snapshot, null, 2));
-    addLog("РџРѕР»РЅР°СЏ РґРёР°РіРЅРѕСЃС‚РёРєР° СЃРєРѕРїРёСЂРѕРІР°РЅР° РІ Р±СѓС„РµСЂ РѕР±РјРµРЅР°.");
+    addLog("Полная диагностика скопирована в буфер обмена.");
   } catch (error) {
-    addLog(`РќРµ СѓРґР°Р»РѕСЃСЊ РІС‹РіСЂСѓР·РёС‚СЊ РґРёР°РіРЅРѕСЃС‚РёРєСѓ: ${String(error)}`);
+    addLog(`Не удалось выгрузить диагностику: ${String(error)}`);
   }
 }
 
-async function ensureYggstackReady({ autoStart = true, silent = false } = {}) {
-  let info = await invoke("get_yggstack_runtime_info");
-
-  if (!info?.ready) {
-    info = await invoke("prepare_yggstack_runtime");
-    if (!silent) addLog(info?.note ?? "Yggstack runtime подготовлен.");
+async function probeEmbeddedTestServer() {
+  const port = Number(testServerPortEl.value || 25566);
+  try {
+    const payload = `diagnostic-ping:${Date.now()}`;
+    const response = await invoke("probe_test_server_command", {
+      port,
+      payload,
+    });
+    addLog(`Тестовый сервер ответил с 127.0.0.1:${port}: ${response || "<empty>"}`);
+  } catch (error) {
+    addLog(`Не удалось подключиться к тестовому серверу на 127.0.0.1:${port}: ${String(error)}`);
   }
-
-  if (autoStart && info?.ready && !info?.running) {
-    info = await invoke("start_yggstack_sidecar");
-    if (!silent) addLog("Yggstack runtime автоматически запущен.");
-  }
-
-  if (typeof renderYggstackRuntime === "function") {
-    renderYggstackRuntime(info);
-  } else if (typeof renderYggstackRuntimeLegacy === "function") {
-    renderYggstackRuntimeLegacy(info);
-  }
-
-  return info;
 }
 
 async function startHosting() {
@@ -1287,7 +935,8 @@ async function startHosting() {
 
   const localPort = Number(localGamePortEl.value || 25565);
   const password = requirePasswordEl.checked ? roomPasswordEl.value.trim() || null : null;
-  const useYggstack = Boolean(useYggstackEl?.checked);
+  const enableGeyser = Boolean(enableGeyserEl.checked);
+  const geyserPort = Number(geyserPortEl.value || 19132);
   hostButtonEl.disabled = true;
   state.tunnelReady = false;
   setMinecraftHint(t("hintWaiting"), false);
@@ -1295,20 +944,17 @@ async function startHosting() {
   try {
     const preflight = await runPreflightCheck({ silent: false });
     if (!preflight.reachable) {
-      addLog("РҐРѕСЃС‚ РЅРµ Р·Р°РїСѓС‰РµРЅ: Р»РѕРєР°Р»СЊРЅС‹Р№ Minecraft РЅРµРґРѕСЃС‚СѓРїРµРЅ. РЎРЅР°С‡Р°Р»Р° РѕС‚РєСЂРѕР№С‚Рµ РјРёСЂ РІ LAN РёР»Рё Р·Р°РїСѓСЃС‚РёС‚Рµ С‚РµСЃС‚РѕРІС‹Р№ СЃРµСЂРІРµСЂ.");
+      addLog("Хост не запущен: локальный Minecraft недоступен. Сначала откройте мир в LAN или запустите тестовый сервер.");
       return;
     }
 
-    let yggInfo = null;
-    if (useYggstack) {
-      yggInfo = await ensureYggstackReady({ autoStart: true, silent: false });
-    }
-    hostSession.yggEnabled = false;
-    hostSession.yggAddress = null;
-    hostSession.yggPublicKey = null;
-    hostSession.yggSubnet = null;
-
-    const bootstrap = await invoke("start_hosting", { roomName, password, localPort, useCloudflare: false });
+    const bootstrap = await invoke("start_hosting", {
+      roomName,
+      password,
+      localPort,
+      enableGeyser,
+      geyserPort,
+    });
     const status = await waitForStatus(
       (snapshot) => snapshot.mode === "host" && ["waitingForPeer", "hosting", "connected", "error"].includes(snapshot.state),
       22000,
@@ -1324,29 +970,10 @@ async function startHosting() {
     hostSession.minecraftVersion = status.minecraftVersion ?? null;
     hostSession.presencePayload = null;
     hostSession.presenceEntered = false;
-    if (useYggstack && yggInfo?.ready) {
-      try {
-        const mappedInfo = await invoke("start_ygg_host_mapping", { localPort });
-        renderYggstackRuntime(mappedInfo);
-        hostSession.yggEnabled = Boolean(mappedInfo?.yggAddress);
-        hostSession.yggAddress = mappedInfo?.yggAddress ?? null;
-        hostSession.yggPublicKey = mappedInfo?.yggPublicKey ?? null;
-        hostSession.yggSubnet = mappedInfo?.yggSubnet ?? null;
-        if (hostSession.yggAddress) {
-          addLog(`Ygg host mapping ready: [${hostSession.yggAddress}]:25565 -> 127.0.0.1:${localPort}.`);
-        }
-      } catch (error) {
-        hostSession.yggEnabled = false;
-        hostSession.yggAddress = null;
-        hostSession.yggPublicKey = null;
-        hostSession.yggSubnet = null;
-        addLog(`Ygg host mapping failed: ${String(error)}`);
-      }
-    }
     if (canAdvertiseHost()) {
       await syncPresence(status, { force: true, enter: true });
     } else {
-      addLog("Presence РѕС‚Р»РѕР¶РµРЅ: Р¶РґС‘Рј РїСѓР±Р»РёС‡РЅС‹Р№ endpoint РѕС‚ relay РёР»Рё reverse tunnel.");
+      addLog("Presence отложен: ждём публичный endpoint от relay или reverse tunnel.");
     }
     await refreshLobby();
     closeModal();
@@ -1368,12 +995,6 @@ async function stopSession() {
   try {
     await safePresenceLeave(state.lobbyChannel);
     await invoke("stop_hosting");
-    if (hostSession.yggEnabled || state.activeTunnelTransport === "yggstack") {
-      try {
-        const info = await invoke("stop_yggstack_sidecar");
-        renderYggstackRuntime(info);
-      } catch {}
-    }
   } catch (error) {
     addLog(`Stop failed: ${String(error)}`);
   } finally {
@@ -1385,10 +1006,6 @@ async function stopSession() {
     hostSession.peerAddr = null;
     hostSession.localPort = 25565;
     hostSession.minecraftVersion = null;
-    hostSession.yggEnabled = false;
-    hostSession.yggAddress = null;
-    hostSession.yggPublicKey = null;
-    hostSession.yggSubnet = null;
     hostSession.presencePayload = null;
     hostSession.presenceEntered = false;
     state.selectedServerId = null;
@@ -1396,55 +1013,6 @@ async function stopSession() {
     renderStatus(status);
     await refreshLobby();
     addLog(t("hostStopped"));
-  }
-}
-
-async function startRelayFallback(flow) {
-  if (!flow || flow.relayAttempted) return;
-  flow.relayAttempted = true;
-  addLog(`Yggstack РЅРµ РїРѕРґРЅСЏР»СЃСЏ. РџРµСЂРµС…РѕР¶Сѓ РЅР° MQTT relay session ${flow.relaySessionId}.`);
-  try {
-    await invoke("start_relay_fallback", {
-      peerId: flow.server.peerId,
-      peerAddrs: flow.peerAddrs,
-      relaySessionId: flow.relaySessionId,
-    });
-  } catch (error) {
-    addLog(`Relay fallback failed to start: ${String(error)}`);
-    state.pendingConnects.delete(flow.server.clientId);
-    state.pendingTransportFlow = null;
-    renderServers();
-  }
-}
-
-async function startYggFallback(flow) {
-  if (!flow || flow.yggAttempted) return;
-  flow.yggAttempted = true;
-
-  const remoteYggAddress = flow.server?.yggAddress ?? null;
-  if (!remoteYggAddress) {
-    await startRelayFallback(flow);
-    return;
-  }
-
-  addLog(`Direct path РЅРµ РїРѕРґРЅСЏР»СЃСЏ. РџСЂРѕР±СѓСЋ Yggstack fallback С‡РµСЂРµР· [${remoteYggAddress}]:25565.`);
-
-  try {
-    const info = await ensureYggstackReady({ autoStart: true, silent: true });
-    if (!info?.ready) {
-      addLog(`Yggstack runtime РЅРµРґРѕСЃС‚СѓРїРµРЅ: ${info?.note ?? "runtime is not ready"}`);
-      await startRelayFallback(flow);
-      return;
-    }
-
-    const mappingInfo = await invoke("start_ygg_client_mapping", {
-      remoteYggAddress,
-    });
-    renderYggstackRuntime(mappingInfo);
-    addLog(`Yggstack tunnel armed: localhost:25565 -> [${remoteYggAddress}]:25565.`);
-  } catch (error) {
-    addLog(`Yggstack fallback failed: ${String(error)}`);
-    await startRelayFallback(flow);
   }
 }
 
@@ -1478,19 +1046,7 @@ async function connectToServer(server) {
   }
 
   try {
-    await ensureYggstackReady({ autoStart: true, silent: true });
     addLog(t("connectProgress", { room: server.roomName, addr: server.peerAddr }));
-    if (server.yggReady && server.yggAddress) {
-      addLog(`РҐРѕСЃС‚ ${server.roomName} РїСѓР±Р»РёРєСѓРµС‚ Ygg-Р°РґСЂРµСЃ [${server.yggAddress}].`);
-    }
-
-    if (server.yggReady && server.yggAddress && server.transportPreference === "yggstack") {
-      addLog(`РљРѕРјРЅР°С‚Р° ${server.roomName} РїРѕРјРµС‡РµРЅР° РєР°Рє Yggstack-preferred. РџРѕРґРЅРёРјР°СЋ Ygg-С‚СѓРЅРЅРµР»СЊ СЃСЂР°Р·Сѓ.`);
-      const info = await invoke("start_ygg_client_mapping", { remoteYggAddress: server.yggAddress });
-      renderYggstackRuntime(info);
-      return;
-    }
-
     const relaySessionId = `relay-${crypto.randomUUID()}`;
     const peerAddrs = sortAdvertisedAddrs(
       [...new Set([...(server.peerAddrs ?? []), normalizeToMultiaddr(server.peerAddr)].filter(Boolean))],
@@ -1498,8 +1054,7 @@ async function connectToServer(server) {
     await invoke("connect_to_peer", {
       peerId: server.peerId,
       peerAddrs,
-      relaySessionId: null,
-      allowRelayFallback: false,
+      relaySessionId,
     });
     const status = await waitForStatus(
       (snapshot) =>
@@ -1515,13 +1070,6 @@ async function connectToServer(server) {
       peer_addr: status.publicUdpAddr ?? status.udpBindAddr,
       relay_session_id: relaySessionId,
     });
-    state.pendingTransportFlow = {
-      server,
-      peerAddrs,
-      relaySessionId,
-      yggAttempted: false,
-      relayAttempted: false,
-    };
     addLog(t("connectRequestSent", { host: server.clientId }));
   } catch (error) {
     state.pendingConnects.delete(server.clientId);
@@ -1569,6 +1117,8 @@ function rerender() {
       publicUdpAddr: null,
       localGamePort: null,
       minecraftVersion: null,
+      geyserEnabled: false,
+      bedrockPort: null,
       passwordProtected: false,
       peerCount: 0,
       peers: [],
@@ -1582,7 +1132,6 @@ function rerender() {
 
 await listen("peer_connected", async (event) => {
   state.pendingConnects.clear();
-  state.pendingTransportFlow = null;
   state.tunnelReady = true;
   state.activeTunnelTransport = event.payload?.relayed ? "relay-circuit" : "direct";
   setMinecraftHint(t("hintConnected"), true);
@@ -1599,7 +1148,6 @@ await listen("peer_connected", async (event) => {
 
 await listen("connection_success", async (event) => {
   state.pendingConnects.clear();
-  state.pendingTransportFlow = null;
   state.tunnelReady = true;
   state.activeTunnelTransport = event.payload?.transport ?? "reverse-tunnel";
   setMinecraftHint(t("hintConnected"), true);
@@ -1610,20 +1158,6 @@ await listen("connection_success", async (event) => {
   );
   const status = await invoke("get_status");
   renderStatus(status);
-  renderServers();
-});
-
-await listen("tunnel_failed", async (event) => {
-  addLog(`Tunnel failed: ${event.payload?.reason ?? "unknown"}`);
-  if (state.pendingTransportFlow?.server?.yggReady && state.pendingTransportFlow?.server?.yggAddress) {
-    await startYggFallback(state.pendingTransportFlow);
-    return;
-  }
-  if (state.pendingTransportFlow) {
-    await startRelayFallback(state.pendingTransportFlow);
-    return;
-  }
-  state.pendingConnects.clear();
   renderServers();
 });
 
@@ -1645,11 +1179,11 @@ await listen("reverse_tunnel_ready", async (event) => {
 
 await listen("test_server_started", async (event) => {
   state.testServerInfo = event.payload ?? null;
-  addLog(`РўРµСЃС‚РѕРІС‹Р№ СЃРµСЂРІРµСЂ РіРѕС‚РѕРІ: ${event.payload?.bindAddr ?? "n/a"} (${event.payload?.protocol ?? "unknown"}).`);
+  addLog(`Тестовый сервер готов: ${event.payload?.bindAddr ?? "n/a"} (${event.payload?.protocol ?? "unknown"}).`);
 });
 
 await listen("test_server_client_closed", async (event) => {
-  addLog(`РўРµСЃС‚РѕРІС‹Р№ СЃРµСЂРІРµСЂ: РєР»РёРµРЅС‚ ${event.payload ?? "unknown"} Р·Р°РІРµСЂС€РёР» СЃРѕРµРґРёРЅРµРЅРёРµ.`);
+  addLog(`Тестовый сервер: клиент ${event.payload ?? "unknown"} завершил соединение.`);
 });
 
 await listen("relay_active", async (event) => {
@@ -1663,65 +1197,15 @@ await listen("hole_punch_success", async (event) => {
 
 navHomeEl.addEventListener("click", () => setPage("home"));
 navSettingsEl.addEventListener("click", () => setPage("settings"));
-openProfileModalEl?.addEventListener("click", () => openProfileModal(false));
 openHostModalEl.addEventListener("click", openModal);
 closeModalEl.addEventListener("click", closeModal);
 closeModalSecondaryEl.addEventListener("click", closeModal);
 modalEl.addEventListener("click", (event) => {
   if (event.target instanceof HTMLElement && event.target.dataset.closeModal === "true") closeModal();
 });
-profileModalEl?.addEventListener("click", (event) => {
-  if (event.target instanceof HTMLElement && event.target.dataset.closeProfileModal === "true") {
-    closeProfileModal();
-  }
-});
-closeProfileModalEl?.addEventListener("click", closeProfileModal);
-closeProfileModalSecondaryEl?.addEventListener("click", closeProfileModal);
-hideOverlayButtonEl?.addEventListener("click", async () => {
-  await appWindow.hide();
-});
-overlayCloseButtonEl?.addEventListener("click", async () => {
-  await appWindow.hide();
-});
-overlayShortcutChipEl?.addEventListener("click", () => {
-  startShortcutCapture("chip");
-});
-overlayShortcutChipEl?.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    startShortcutCapture("chip");
-  }
-});
-settingsShortcutInputEl?.addEventListener("focus", () => {
-  startShortcutCapture("settings");
-});
-settingsShortcutInputEl?.addEventListener("click", () => {
-  startShortcutCapture("settings");
-});
-profileShortcutInputEl?.addEventListener("focus", () => {
-  startShortcutCapture("profile");
-});
-profileShortcutInputEl?.addEventListener("click", () => {
-  startShortcutCapture("profile");
-});
-function isOverlayDragTarget(target) {
-  return (
-    target instanceof HTMLElement &&
-    !target.closest("button, input, label, textarea, select, a, [data-no-drag]")
-  );
-}
-
-document.querySelectorAll("[data-overlay-drag='true']").forEach((element) => {
-  element.addEventListener("pointerdown", async (event) => {
-    if (event.button !== 0) return;
-    if (!isOverlayDragTarget(event.target)) return;
-    try {
-      await appWindow.startDragging();
-    } catch {}
-  });
-});
 
 requirePasswordEl.addEventListener("change", syncPasswordField);
+enableGeyserEl.addEventListener("change", syncGeyserField);
 hostButtonEl.addEventListener("click", startHosting);
 stopButtonEl.addEventListener("click", stopSession);
 refreshLobbyEl.addEventListener("click", async () => {
@@ -1746,8 +1230,18 @@ copySelectedEndpointEl.addEventListener("click", async () => {
   await navigator.clipboard.writeText(selected.peerAddr);
   addLog(t("copiedIp"));
 });
+copySelectedBedrockEndpointEl.addEventListener("click", async () => {
+  const selected = getSelectedServer();
+  const endpoint = deriveBedrockEndpoint(selected?.peerAddr, selected?.bedrockPort);
+  if (!endpoint) return;
+  await navigator.clipboard.writeText(endpoint);
+  addLog(t("copiedBedrockIp"));
+});
 runPreflightEl.addEventListener("click", async () => {
   await runPreflightCheck();
+});
+autoDetectPortEl.addEventListener("click", async () => {
+  await autoDetectLocalGamePort();
 });
 startTestServerEl.addEventListener("click", async () => {
   await startEmbeddedTestServer();
@@ -1757,18 +1251,6 @@ stopTestServerEl.addEventListener("click", async () => {
 });
 probeTestServerEl.addEventListener("click", async () => {
   await probeEmbeddedTestServer();
-});
-prepareYggstackEl?.addEventListener("click", async () => {
-  await prepareYggstackRuntimeAction();
-});
-startYggstackEl?.addEventListener("click", async () => {
-  await startYggstackSidecarAction();
-});
-retryYggstackEl?.addEventListener("click", async () => {
-  await retryYggstackPeersAction();
-});
-stopYggstackEl?.addEventListener("click", async () => {
-  await stopYggstackSidecarAction();
 });
 connectSelectedEl.addEventListener("click", async () => {
   const selected = getSelectedServer();
@@ -1805,75 +1287,18 @@ document.querySelectorAll("[data-theme-value]").forEach((button) => {
 document.querySelectorAll("[data-language-value]").forEach((button) => {
   button.addEventListener("click", () => applyLanguage(button.dataset.languageValue));
 });
-settingsNicknameEl?.addEventListener("input", () => {
-  syncProfileSurface();
-});
-profileNicknameInputEl?.addEventListener("input", () => {
-  syncProfileSurface();
-});
-saveProfileButtonEl?.addEventListener("click", async () => {
-  await persistProfileFromFields(settingsNicknameEl, settingsShortcutInputEl, settingsAvatarInputEl);
-});
-saveProfileModalEl?.addEventListener("click", async () => {
-  await persistProfileFromFields(profileNicknameInputEl, profileShortcutInputEl, profileAvatarInputEl, {
-    closeAfter: true,
-  });
-});
-clearAvatarButtonEl?.addEventListener("click", async () => {
-  state.preferences.profile.avatarDataUrl = null;
-  if (settingsAvatarInputEl) settingsAvatarInputEl.value = "";
-  if (profileAvatarInputEl) profileAvatarInputEl.value = "";
-  saveProfile();
-  syncProfileSurface();
-  addLog("РђРІР°С‚Р°СЂ РѕС‡РёС‰РµРЅ.");
-});
-settingsAvatarInputEl?.addEventListener("change", async () => {
-  const file = settingsAvatarInputEl.files?.[0];
-  if (!file) return;
-  state.preferences.profile.avatarDataUrl = await fileToDataUrl(file);
-  syncProfileSurface();
-});
-profileAvatarInputEl?.addEventListener("change", async () => {
-  const file = profileAvatarInputEl.files?.[0];
-  if (!file) return;
-  state.preferences.profile.avatarDataUrl = await fileToDataUrl(file);
-  syncProfileSurface();
-});
 
 document.addEventListener("keydown", (event) => {
-  if (state.shortcutCapture) {
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.key === "Escape") {
-      stopShortcutCapture();
-      return;
-    }
-    const shortcut = shortcutFromKeyboardEvent(event);
-    if (!shortcut) {
-      return;
-    }
-    void persistOverlayShortcut(shortcut);
-    stopShortcutCapture();
-    return;
-  }
-  if (event.key !== "Escape") return;
-  if (!modalEl.classList.contains("hidden")) {
-    closeModal();
-    return;
-  }
-  if (profileModalEl && !profileModalEl.classList.contains("hidden")) {
-    closeProfileModal();
-    return;
-  }
-  void appWindow.hide();
+  if (event.key === "Escape") closeModal();
 });
 
-await hydrateProfile();
 document.body.dataset.theme = state.preferences.theme;
+sidebarClientIdEl.textContent = localClientId;
+settingsClientIdEl.textContent = localClientId;
 applyTranslations();
 renderSettingsOptions();
 syncPasswordField();
-syncProfileSurface();
+syncGeyserField();
 renderLogs();
 renderSelectedServer();
 renderSessionCard();
@@ -1885,6 +1310,4 @@ setInterval(() => {
 }, POLL_INTERVAL_MS);
 
 await setupAbly();
-await refreshYggstackRuntime({ silent: true });
 await pollStatus();
-

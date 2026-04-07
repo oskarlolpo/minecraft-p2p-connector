@@ -16,19 +16,13 @@
       {
         "label": "main",
         "title": "Minecraft P2P Connector",
-        "width": 1080,
-        "height": 700,
-        "minWidth": 720,
-        "minHeight": 480,
+        "width": 1500,
+        "height": 920,
+        "minWidth": 1180,
+        "minHeight": 760,
         "resizable": true,
         "fullscreen": false,
-        "center": true,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "visible": false,
-        "skipTaskbar": true,
-        "shadow": false
+        "center": true
       }
     ],
     "security": {
@@ -38,7 +32,7 @@
   "bundle": {
     "active": true,
     "resources": [
-      "resources/**/*"
+      "resources/geyser/Geyser-Standalone.jar"
     ],
     "icon": [
       "icons/32x32.png",

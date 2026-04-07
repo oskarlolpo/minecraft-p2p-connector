@@ -1,6 +1,5 @@
 node_modules/
 dist/
-.runtime/
 target/
 src-tauri/target/
 .DS_Store
@@ -20,3 +19,4 @@ rustdesk/
 tailscale/
 tauri/
 ZeroTierOne/
+.runtime/

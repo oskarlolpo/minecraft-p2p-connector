@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
@@ -9,230 +9,232 @@
   <body data-theme="oled">
     <div class="app-shell">
       <aside class="sidebar">
-        <div class="sidebar-top">
-          <div class="sidebar-brand" aria-label="Minecraft P2P Connector">
-            <img class="brand-icon" src="./assets/icons/banana-stroke-rounded.svg" alt="" />
+        <div class="sidebar-brand-block">
+          <div class="brand-mark">
+            <img src="./assets/icons/banana-stroke-rounded.svg" alt="" />
           </div>
-          <button id="nav-home" class="nav-button nav-button-active" type="button" aria-label="Home">
-            <img class="nav-icon" src="./assets/icons/home.svg" alt="" />
-          </button>
-          <button id="nav-settings" class="nav-button" type="button" aria-label="Settings">
-            <img class="nav-icon" src="./assets/icons/settings.svg" alt="" />
-          </button>
+          <div class="brand-copy">
+            <span class="brand-label">MCP2P</span>
+            <strong>Minecraft P2P Connector</strong>
+          </div>
         </div>
 
-        <div class="sidebar-profile" aria-label="Local profile">
-          <img class="profile-icon-svg" src="./assets/icons/user-account.svg" alt="" />
+        <nav class="sidebar-nav">
+          <button id="nav-home" class="nav-button nav-button-active" type="button" aria-label="Главная">
+            <img src="./assets/icons/home.svg" alt="" />
+            <span data-i18n="navHome">Главная</span>
+          </button>
+          <button id="nav-settings" class="nav-button" type="button" aria-label="Настройки">
+            <img src="./assets/icons/settings.svg" alt="" />
+            <span data-i18n="navSettings">Настройки</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-profile">
+          <div class="profile-glyph">
+            <img src="./assets/icons/user-account.svg" alt="" />
+          </div>
+          <div class="profile-copy">
+            <span class="brand-label" data-i18n="localClientLabel">Локальный клиент</span>
+            <strong id="sidebar-client-id">mc-local</strong>
+          </div>
         </div>
       </aside>
 
       <main class="workspace">
-        <header id="overlay-topbar" class="overlay-topbar" data-tauri-drag-region data-overlay-drag="true">
-          <div class="overlay-brand">
-            <div class="overlay-brand-mark">
-              <img class="brand-icon brand-icon-large" src="./assets/icons/banana-stroke-rounded.svg" alt="" />
-            </div>
-            <div class="overlay-brand-copy">
-              <strong>Blood Paradise Hub</strong>
-              <span id="overlay-status-line">Оверлей скрыт в трее. Открывайте его горячей клавишей.</span>
-            </div>
-          </div>
-
-          <div class="overlay-actions">
-            <button id="open-profile-modal" class="profile-pill" type="button">
-              <span id="topbar-profile-avatar" class="profile-pill-avatar">BP</span>
-              <span id="topbar-profile-name">Локальный игрок</span>
-            </button>
-            <div id="overlay-shortcut-chip" class="shortcut-chip" role="button" tabindex="0" title="Нажмите, чтобы сменить горячую клавишу">SHIFT+TAB</div>
-            <div class="window-controls" data-no-drag>
-              <button id="hide-overlay-button" class="secondary-button compact window-control-button" type="button">−</button>
-              <button id="overlay-close-button" class="secondary-button compact window-control-button close" type="button">×</button>
-            </div>
-          </div>
-        </header>
-
         <section id="page-home" class="page page-active">
-          <header class="hero-panel" data-overlay-drag="true">
-            <div class="hero-copy">
-              <div class="hero-chip" data-i18n="heroBadge">Р“Р›РђР’РќРђРЇ</div>
+          <header class="hero-panel">
+            <div class="hero-left">
+              <div class="hero-chip" data-i18n="heroBadge">СЕТЕВОЙ МОСТ</div>
               <h1 data-i18n="appTitle">Minecraft P2P Connector</h1>
-              <p data-i18n="appSubtitle">
-                РџСЂСЏРјРѕРµ P2P-РїРѕРґРєР»СЋС‡РµРЅРёРµ РґР»СЏ Minecraft Java Р±РµР· VPN-Р°РґР°РїС‚РµСЂРѕРІ Рё РІРёСЂС‚СѓР°Р»СЊРЅС‹С… СЃРµС‚РµР№.
+              <p class="hero-copy" data-i18n="appSubtitle">
+                Быстрый LAN-коннектор для Minecraft Java. Создайте комнату, пригласите друга и подключайтесь к localhost без VPN-адаптеров.
               </p>
+
+              <div class="hero-actions">
+                <button id="open-host-modal" class="primary-button" type="button" data-i18n="hostServerButton">
+                  Создать хост
+                </button>
+                <button id="refresh-lobby" class="ghost-button" type="button" data-i18n="refreshButton">
+                  Обновить лобби
+                </button>
+              </div>
             </div>
 
-            <div class="hero-side">
-              <div class="status-pill" id="connection-state">РћР–РР”РђРќРР•</div>
-              <p class="status-caption">
-                <span data-i18n="ablyPresenceLabel">Ably Presence</span>: <span id="ably-state">connecting</span>
+            <div class="hero-right">
+              <div class="status-orb">
+                <span class="status-label" data-i18n="ablyPresenceLabel">Ably Presence</span>
+                <strong id="connection-state">ОЖИДАНИЕ</strong>
+                <span id="ably-state">connecting</span>
+              </div>
+              <p id="host-lock-note" class="hero-note" data-i18n="hostNoteIdle">
+                Нажмите «Создать хост», чтобы опубликовать ваш локальный сервер или мир из LAN.
               </p>
             </div>
           </header>
 
-          <div class="dashboard-grid">
-            <div class="primary-column">
-              <section class="panel cta-panel">
-                <div class="cta-panel-copy">
-                  <p class="section-label" data-i18n="quickStartLabel">Р‘Р«РЎРўР Р«Р™ РЎРўРђР Рў</p>
-                  <h2 data-i18n="quickStartTitle">РЎРѕР·РґР°Р№С‚Рµ РєРѕРјРЅР°С‚Сѓ РёР»Рё РїРѕРґРєР»СЋС‡РёС‚РµСЃСЊ Рє СѓР¶Рµ РѕРїСѓР±Р»РёРєРѕРІР°РЅРЅРѕРјСѓ С…РѕСЃС‚Сѓ</h2>
-                  <p id="host-lock-note" class="panel-note" data-i18n="hostNoteIdle">
-                    РќР°Р¶РјРёС‚Рµ В«РҐРѕСЃС‚РёС‚СЊ СЃРµСЂРІРµСЂВ», С‡С‚РѕР±С‹ РѕРїСѓР±Р»РёРєРѕРІР°С‚СЊ РІР°С€ Р»РѕРєР°Р»СЊРЅС‹Р№ СЃРµСЂРІРµСЂ РІ Р»РѕР±Р±Рё.
-                  </p>
-                </div>
-                <div class="cta-panel-actions">
-                  <button id="open-host-modal" class="gradient-button" type="button" data-i18n="hostServerButton">
-                    РҐРћРЎРўРРўР¬ РЎР•Р Р’Р•Р 
-                  </button>
-                  <button id="refresh-lobby" class="secondary-button" type="button" data-i18n="refreshButton">
-                    РћР±РЅРѕРІРёС‚СЊ
-                  </button>
-                </div>
-              </section>
-
-              <section class="panel">
-                <div class="panel-header">
+          <div class="content-grid">
+            <div class="stack-column">
+              <section class="panel panel-large">
+                <div class="panel-head">
                   <div>
-                    <p class="section-label" data-i18n="activeHostLabel">Р’РђРЁ РђРљРўРР’РќР«Р™ РҐРћРЎРў</p>
-                    <h2 id="host-section-title" data-i18n="activeHostTitle">РЎРѕСЃС‚РѕСЏРЅРёРµ РІР°С€РµР№ РєРѕРјРЅР°С‚С‹</h2>
+                    <span class="eyebrow" data-i18n="activeHostLabel">АКТИВНЫЙ ХОСТ</span>
+                    <h2 id="host-section-title" data-i18n="activeHostTitle">Состояние вашей комнаты</h2>
                   </div>
-                  <button id="stop-button" class="secondary-button danger-button" type="button" data-i18n="stopButton">
-                    РћРЎРўРђРќРћР’РРўР¬
+                  <button id="stop-button" class="ghost-button danger-button" type="button" data-i18n="stopButton">
+                    Остановить
                   </button>
                 </div>
-
                 <div id="active-host-card" class="active-host-card empty"></div>
-
-                <div class="players-head">
-                  <span data-i18n="playerColumn">РРіСЂРѕРє</span>
-                  <span data-i18n="playerActionColumn">Р”РµР№СЃС‚РІРёРµ</span>
+                <div class="row-head players-head">
+                  <span data-i18n="playerColumn">Игрок</span>
+                  <span data-i18n="playerActionColumn">Действие</span>
                 </div>
                 <div id="peer-list" class="player-list"></div>
               </section>
 
               <section class="panel">
-                <div class="panel-header">
+                <div class="panel-head">
                   <div>
-                    <p class="section-label" data-i18n="publicHostsLabel">РџРЈР‘Р›РР§РќР«Р• РЎР•Р Р’Р•Р Р«</p>
-                    <h2>
-                      <span id="lobby-count">0 servers</span>
-                    </h2>
+                    <span class="eyebrow" data-i18n="publicHostsLabel">ОПУБЛИКОВАННЫЕ КОМНАТЫ</span>
+                    <h2 id="lobby-count">0 rooms</h2>
                   </div>
-                  <p class="panel-note" data-i18n="publicHostsSubtitle">
-                    РЎРїРёСЃРѕРє РѕР±РЅРѕРІР»СЏРµС‚СЃСЏ РІ СЂРµР°Р»СЊРЅРѕРј РІСЂРµРјРµРЅРё С‡РµСЂРµР· Ably Presence.
+                  <p class="panel-copy" data-i18n="publicHostsSubtitle">
+                    Список комнат обновляется через Ably Presence в реальном времени.
                   </p>
                 </div>
-
-                <div class="server-head">
-                  <span data-i18n="serverNameColumn">РРјСЏ</span>
-                  <span data-i18n="serverVersionColumn">Р’РµСЂСЃРёСЏ</span>
-                  <span data-i18n="serverPlayersColumn">РРіСЂРѕРєРё</span>
-                  <span data-i18n="serverActionColumn">Р”РµР№СЃС‚РІРёРµ</span>
+                <div class="row-head server-head">
+                  <span data-i18n="serverNameColumn">Комната</span>
+                  <span data-i18n="serverVersionColumn">Версия</span>
+                  <span data-i18n="serverPlayersColumn">Игроки</span>
+                  <span data-i18n="serverActionColumn">Действие</span>
                 </div>
                 <div id="server-list" class="server-list"></div>
               </section>
             </div>
 
-            <div class="secondary-column">
-              <section class="panel summary-panel">
-                <div class="panel-header">
+            <div class="stack-column side-column">
+              <section class="panel snapshot-panel">
+                <div class="panel-head">
                   <div>
-                    <p class="section-label" data-i18n="networkSnapshotLabel">РЎР•РўР•Р’РћР™ РЎРќРРњРћРљ</p>
-                    <h2 data-i18n="networkSnapshotTitle">РўРµРєСѓС‰Р°СЏ СЃРµСЃСЃРёСЏ</h2>
+                    <span class="eyebrow" data-i18n="networkSnapshotLabel">ТЕКУЩАЯ СЕССИЯ</span>
+                    <h2 data-i18n="networkSnapshotTitle">Сетевой снимок</h2>
                   </div>
                 </div>
-
-                <div class="summary-grid">
-                  <div class="summary-card">
-                    <span class="summary-label" data-i18n="summaryMode">Р РµР¶РёРј</span>
+                <div class="snapshot-grid">
+                  <div class="metric">
+                    <span data-i18n="summaryMode">Режим</span>
                     <strong id="session-mode">Idle</strong>
                   </div>
-                  <div class="summary-card">
-                    <span class="summary-label" data-i18n="summaryEndpoint">Endpoint</span>
+                  <div class="metric">
+                    <span data-i18n="summaryEndpoint">Публичный адрес</span>
                     <strong id="public-endpoint">n/a</strong>
                   </div>
-                  <div class="summary-card">
-                    <span class="summary-label" data-i18n="summaryVersion">Р’РµСЂСЃРёСЏ</span>
-                    <strong id="current-version">РќРµРёР·РІРµСЃС‚РЅРѕ</strong>
+                  <div class="metric">
+                    <span data-i18n="summaryVersion">Версия</span>
+                    <strong id="current-version">Unknown</strong>
                   </div>
-                  <div class="summary-card">
-                    <span class="summary-label" data-i18n="summaryPeers">Peers</span>
-                    <strong id="peer-count">0 peers</strong>
+                  <div class="metric">
+                    <span data-i18n="summaryPeers">Подключения</span>
+                    <strong id="peer-count">0</strong>
                   </div>
                 </div>
               </section>
 
               <section class="panel selected-panel">
-                <div class="panel-header">
+                <div class="panel-head">
                   <div>
-                    <p class="section-label" data-i18n="selectedServerLabel">Р’Р«Р‘Р РђРќРќР«Р™ РЎР•Р Р’Р•Р </p>
-                    <h2 id="selected-server">РќРёС‡РµРіРѕ РЅРµ РІС‹Р±СЂР°РЅРѕ</h2>
+                    <span class="eyebrow" data-i18n="selectedServerLabel">ВЫБРАННАЯ КОМНАТА</span>
+                    <h2 id="selected-server">Комната не выбрана</h2>
                   </div>
                 </div>
-
                 <div class="selected-card">
-                  <div class="selected-block">
-                    <span class="summary-label" data-i18n="selectedAddressLabel">РђРґСЂРµСЃ</span>
-                    <strong id="selected-endpoint">n/a</strong>
-                  </div>
-                  <p id="selected-meta" class="panel-note" data-i18n="selectedMetaEmpty">
-                    Р’С‹Р±РµСЂРёС‚Рµ СЃРµСЂРІРµСЂ РёР· СЃРїРёСЃРєР° СЃР»РµРІР°, С‡С‚РѕР±С‹ СѓРІРёРґРµС‚СЊ РґРµС‚Р°Р»Рё РїРѕРґРєР»СЋС‡РµРЅРёСЏ.
-                  </p>
-                  <div class="selected-actions">
-                    <button id="copy-selected-endpoint" class="secondary-button" type="button" data-i18n="copyIpButton">
-                      РљРѕРїРёСЂРѕРІР°С‚СЊ IP
-                    </button>
-                    <button id="connect-selected" class="gradient-button small" type="button" data-i18n="connectButton">
-                      РџРћР”РљР›Р®Р§РРўР¬РЎРЇ
-                    </button>
-                  </div>
+                <div class="metric-row">
+                  <span data-i18n="selectedAddressLabel">Endpoint</span>
+                  <strong id="selected-endpoint">n/a</strong>
+                </div>
+                <div class="metric-row">
+                  <span data-i18n="selectedBedrockAddressLabel">Bedrock endpoint</span>
+                  <strong id="selected-bedrock-endpoint">n/a</strong>
+                </div>
+                <p id="selected-meta" class="panel-copy" data-i18n="selectedMetaEmpty">
+                  Выберите комнату из списка слева, чтобы увидеть адрес, версию и способ подключения.
+                </p>
+                <div class="hero-actions compact">
+                  <button id="copy-selected-endpoint" class="ghost-button" type="button" data-i18n="copyIpButton">
+                    Копировать адрес
+                  </button>
+                  <button id="copy-selected-bedrock-endpoint" class="ghost-button" type="button" data-i18n="copyBedrockIpButton">
+                    Копировать Bedrock
+                  </button>
+                  <button id="connect-selected" class="primary-button" type="button" data-i18n="connectButton">
+                    Подключиться
+                  </button>
+                </div>
                 </div>
               </section>
 
-              <section class="panel tunnel-panel">
-                <div class="panel-header">
+              <section class="panel">
+                <div class="panel-head">
                   <div>
-                    <p class="section-label" data-i18n="tunnelLabel">РЎРћРЎРўРћРЇРќРР• РўРЈРќРќР•Р›РЇ</p>
-                    <h2 id="status-note">РћР¶РёРґР°РЅРёРµ</h2>
+                    <span class="eyebrow" data-i18n="tunnelLabel">СОСТОЯНИЕ ТУННЕЛЯ</span>
+                    <h2 id="status-note">Ожидание</h2>
                   </div>
                 </div>
                 <div id="minecraft-target-hint" class="minecraft-hint" data-i18n="hintWaiting">
-                  РћР¶РёРґР°РЅРёРµ С‚СѓРЅРЅРµР»СЏ...
+                  Ожидание действия...
                 </div>
-                <label class="field" style="margin-top: 16px;">
-                  <span>Порт тестового сервера</span>
+              </section>
+
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <span class="eyebrow" data-i18n="diagnosticsSectionLabel">ДИАГНОСТИКА</span>
+                    <h2 data-i18n="diagnosticsSectionTitle">Проверка локального сервера</h2>
+                  </div>
+                </div>
+                <p class="panel-copy" data-i18n="diagnosticsDescription">
+                  Используйте preflight и встроенный тестовый сервер, чтобы быстро понять, жив ли локальный Minecraft-порт.
+                </p>
+                <label class="field">
+                  <span data-i18n="testServerPortLabel">Порт диагностики</span>
                   <input id="test-server-port" type="number" min="1" max="65535" value="25566" />
                 </label>
-                <div class="selected-actions" style="margin-top: 16px;">
-                  <button id="run-preflight" class="secondary-button" type="button">Запустить Preflight</button>
-                  <button id="start-test-server" class="secondary-button" type="button">Запустить тестовый сервер</button>
-                  <button id="stop-test-server" class="secondary-button" type="button">Остановить тестовый сервер</button>
-                </div>
-                <div class="selected-actions" style="margin-top: 10px;">
-                  <button id="probe-test-server" class="secondary-button" type="button">Подключиться к тестовому серверу</button>
+                <div class="tool-grid">
+                  <button id="run-preflight" class="ghost-button" type="button" data-i18n="runPreflightButton">
+                    Проверить Minecraft
+                  </button>
+                  <button id="start-test-server" class="ghost-button" type="button" data-i18n="startTestServerButton">
+                    Запустить тестовый сервер
+                  </button>
+                  <button id="stop-test-server" class="ghost-button" type="button" data-i18n="stopTestServerButton">
+                    Остановить тестовый сервер
+                  </button>
+                  <button id="probe-test-server" class="ghost-button" type="button" data-i18n="probeTestServerButton">
+                    Подключиться к тестовому серверу
+                  </button>
                 </div>
               </section>
 
               <section class="panel log-panel">
-                <div class="panel-header">
+                <div class="panel-head">
                   <div>
-                    <p class="section-label" data-i18n="eventLogLabel">Р–РЈР РќРђР› РЎРћР‘Р«РўРР™</p>
-                    <h2 data-i18n="eventLogTitle">РћС‚Р»Р°РґРєР° Рё СЃРµС‚РµРІС‹Рµ СЃРѕР±С‹С‚РёСЏ</h2>
+                    <span class="eyebrow" data-i18n="eventLogLabel">ЖУРНАЛ</span>
+                    <h2 data-i18n="eventLogTitle">Отладка и сетевые события</h2>
                   </div>
-                  <button id="copy-logs" class="secondary-button" type="button" data-i18n="copyLogButton">
-                    РљРѕРїРёСЂРѕРІР°С‚СЊ Р»РѕРі
-                  </button>
-                </div>
-                <div class="panel-note" id="yggstack-status" style="margin-bottom: 14px;">
-                  Yggstack: runtime ещё не подготовлен.
-                </div>
-                <div class="selected-actions" style="margin-bottom: 14px;">
-                  <button id="prepare-yggstack" class="secondary-button" type="button">Проверить Yggstack</button>
-                  <button id="start-yggstack" class="secondary-button" type="button">Запустить Yggstack</button>
-                  <button id="retry-yggstack" class="secondary-button" type="button">Обновить peer-узлы</button>
-                  <button id="stop-yggstack" class="secondary-button" type="button">Остановить Yggstack</button>
-                </div>
-                <div class="selected-actions" style="margin-bottom: 14px;">
-                  <button id="copy-diagnostics" class="secondary-button" type="button">Копировать Diagnostics JSON</button>
+                  <div class="hero-actions compact">
+                    <button id="copy-logs" class="ghost-button" type="button" data-i18n="copyLogButton">
+                      Копировать лог
+                    </button>
+                    <button
+                      id="copy-diagnostics"
+                      class="ghost-button"
+                      type="button"
+                      data-i18n="copyDiagnosticsButton"
+                    >
+                      Копировать диагностику
+                    </button>
+                  </div>
                 </div>
                 <div id="logs" class="log-list"></div>
               </section>
@@ -241,98 +243,79 @@
         </section>
 
         <section id="page-settings" class="page">
-          <header class="hero-panel settings-hero" data-overlay-drag="true">
-            <div class="hero-copy">
-              <div class="hero-chip" data-i18n="settingsBadge">РќРђРЎРўР РћР™РљР</div>
-              <h1 data-i18n="settingsTitle">РџРµСЂСЃРѕРЅР°Р»РёР·Р°С†РёСЏ РёРЅС‚РµСЂС„РµР№СЃР°</h1>
-              <p data-i18n="settingsSubtitle">
-                Р’С‹Р±РµСЂРёС‚Рµ С‚РµРјСѓ РѕС„РѕСЂРјР»РµРЅРёСЏ Рё СЏР·С‹Рє РёРЅС‚РµСЂС„РµР№СЃР° РїСЂРёР»РѕР¶РµРЅРёСЏ.
+          <header class="hero-panel settings-hero">
+            <div class="hero-left">
+              <div class="hero-chip" data-i18n="settingsBadge">НАСТРОЙКИ</div>
+              <h1 data-i18n="settingsTitle">Приложение и оформление</h1>
+              <p class="hero-copy" data-i18n="settingsSubtitle">
+                Переключайте тему, язык и проверяйте служебные инструменты без отдельного overlay-режима.
               </p>
             </div>
           </header>
 
-          <div class="settings-grid">
+          <div class="settings-layout">
             <section class="panel">
-              <div class="panel-header">
+              <div class="panel-head">
                 <div>
-                  <p class="section-label">ПРОФИЛЬ</p>
-                  <h2>Локальный игрок и overlay</h2>
+                  <span class="eyebrow" data-i18n="profileSectionLabel">ПРОФИЛЬ</span>
+                  <h2 data-i18n="profileSectionTitle">Локальная идентичность</h2>
                 </div>
               </div>
-
-              <div class="profile-settings-grid">
-                <div class="profile-preview-card">
-                  <div id="settings-avatar-preview" class="profile-preview-avatar">BP</div>
-                  <div class="profile-preview-copy">
-                    <strong id="settings-profile-name">Локальный игрок</strong>
-                    <span id="settings-profile-subtitle">Этот профиль публикуется в lobby и отображается в overlay.</span>
-                  </div>
+              <div class="profile-card">
+                <div class="profile-glyph large">
+                  <img src="./assets/icons/user-account.svg" alt="" />
                 </div>
-
-                <div class="profile-form-stack">
-                  <label class="field">
-                    <span>Ник игрока</span>
-                    <input id="settings-nickname" type="text" maxlength="24" placeholder="Например, Oskar" />
-                  </label>
-
-                  <label class="field">
-                    <span>Аватар</span>
-                    <input id="settings-avatar-input" type="file" accept="image/*" />
-                  </label>
-
-                  <label class="field">
-                    <span>Горячая клавиша overlay</span>
-                    <input id="settings-shortcut-input" type="text" maxlength="32" placeholder="SHIFT+TAB" readonly />
-                  </label>
-
-                  <div class="modal-actions profile-actions">
-                    <button id="clear-avatar-button" class="secondary-button" type="button">Очистить аватар</button>
-                    <button id="save-profile-button" class="gradient-button small" type="button">Сохранить профиль</button>
+                <div>
+                  <h3 data-i18n="profileCardTitle">Один клиент, один профиль</h3>
+                  <p class="panel-copy" data-i18n="profileCardDescription">
+                    Имя клиента формируется локально и используется для хоста, списка комнат и служебных handshake-сообщений.
+                  </p>
+                  <div class="profile-meta">
+                    <span class="tag">Client ID</span>
+                    <strong id="settings-client-id">mc-local</strong>
                   </div>
                 </div>
               </div>
             </section>
 
             <section class="panel">
-              <div class="panel-header">
+              <div class="panel-head">
                 <div>
-                  <p class="section-label" data-i18n="themeSectionLabel">РўР•РњРђ</p>
-                  <h2 data-i18n="themeSectionTitle">РћС„РѕСЂРјР»РµРЅРёРµ</h2>
+                  <span class="eyebrow" data-i18n="themeSectionLabel">ТЕМА</span>
+                  <h2 data-i18n="themeSectionTitle">Оформление</h2>
                 </div>
               </div>
-
               <div class="settings-options">
                 <button class="option-card" type="button" data-theme-value="white">
-                  <span data-i18n="themeWhiteTitle">РЎРІРµС‚Р»Р°СЏ</span>
-                  <small data-i18n="themeWhiteDescription">Р§РёСЃС‚Р°СЏ СЃРІРµС‚Р»Р°СЏ С‚РµРјР° СЃ РјСЏРіРєРёРјРё С‚РµРЅСЏРјРё.</small>
+                  <span data-i18n="themeWhiteTitle">Светлая</span>
+                  <small data-i18n="themeWhiteDescription">Более воздушная тема с холодными белыми поверхностями.</small>
                 </button>
                 <button class="option-card" type="button" data-theme-value="dark">
-                  <span data-i18n="themeDarkTitle">РўС‘РјРЅР°СЏ</span>
-                  <small data-i18n="themeDarkDescription">РљР»Р°СЃСЃРёС‡РµСЃРєР°СЏ С‚С‘РјРЅР°СЏ С‚РµРјР° РґР»СЏ РїРѕРІСЃРµРґРЅРµРІРЅРѕР№ РёРіСЂС‹.</small>
+                  <span data-i18n="themeDarkTitle">Graphite</span>
+                  <small data-i18n="themeDarkDescription">Спокойная тёмная тема с синим продуктовым акцентом.</small>
                 </button>
                 <button class="option-card" type="button" data-theme-value="oled">
-                  <span data-i18n="themeOledTitle">OLED</span>
-                  <small data-i18n="themeOledDescription">Р“Р»СѓР±РѕРєРёР№ С‡С‘СЂРЅС‹Р№ С„РѕРЅ Рё СЏСЂРєРёРµ Р°РєС†РµРЅС‚С‹ РєР°Рє РІ РјР°РєРµС‚Рµ.</small>
+                  <span data-i18n="themeOledTitle">Ember</span>
+                  <small data-i18n="themeOledDescription">Тёплая почти-чёрная тема в духе Warp.</small>
                 </button>
               </div>
             </section>
 
             <section class="panel">
-              <div class="panel-header">
+              <div class="panel-head">
                 <div>
-                  <p class="section-label" data-i18n="languageSectionLabel">РЇР—Р«Рљ</p>
-                  <h2 data-i18n="languageSectionTitle">Р›РѕРєР°Р»РёР·Р°С†РёСЏ</h2>
+                  <span class="eyebrow" data-i18n="languageSectionLabel">ЯЗЫК</span>
+                  <h2 data-i18n="languageSectionTitle">Локализация</h2>
                 </div>
               </div>
-
               <div class="settings-options">
                 <button class="option-card" type="button" data-language-value="ru">
-                  <span data-i18n="languageRussianTitle">Р СѓСЃСЃРєРёР№</span>
-                  <small data-i18n="languageRussianDescription">РћСЃРЅРѕРІРЅРѕР№ СЏР·С‹Рє РёРЅС‚РµСЂС„РµР№СЃР° Рё РїРѕРґСЃРєР°Р·РѕРє.</small>
+                  <span data-i18n="languageRussianTitle">Русский</span>
+                  <small data-i18n="languageRussianDescription">Русские подписи, подсказки и сообщения интерфейса.</small>
                 </button>
                 <button class="option-card" type="button" data-language-value="en">
                   <span data-i18n="languageEnglishTitle">English</span>
-                  <small data-i18n="languageEnglishDescription">Interface labels and controls in English.</small>
+                  <small data-i18n="languageEnglishDescription">English labels, controls, and helper copy.</small>
                 </button>
               </div>
             </section>
@@ -344,112 +327,77 @@
     <div id="host-modal" class="modal-shell hidden" aria-hidden="true">
       <div class="modal-backdrop" data-close-modal="true"></div>
       <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="host-modal-title">
-        <div class="panel-header">
+        <div class="panel-head">
           <div>
-            <p class="section-label" data-i18n="modalLabel">РљРћРќР¤РР“РЈР РђР¦РРЇ РҐРћРЎРўРђ</p>
-            <h2 id="host-modal-title" data-i18n="modalTitle">РљРѕРЅС„РёРіСѓСЂР°С†РёСЏ С…РѕСЃС‚Р°</h2>
+            <span class="eyebrow" data-i18n="modalLabel">КОНФИГУРАЦИЯ ХОСТА</span>
+            <h2 id="host-modal-title" data-i18n="modalTitle">Создать комнату</h2>
           </div>
           <button id="close-modal" class="icon-button" type="button" aria-label="Закрыть">×</button>
         </div>
 
-        <label class="field">
-          <span data-i18n="modalServerNameLabel">РРјСЏ СЃРµСЂРІРµСЂР°</span>
-          <input
-            id="room-name"
-            type="text"
-            maxlength="32"
-            placeholder="Diamond Realm"
-            data-i18n-placeholder="modalServerNamePlaceholder"
-          />
-        </label>
+        <div class="modal-grid">
+          <label class="field">
+            <span data-i18n="modalServerNameLabel">Название комнаты</span>
+            <input
+              id="room-name"
+              type="text"
+              maxlength="32"
+              placeholder="Northern Lights SMP"
+              data-i18n-placeholder="modalServerNamePlaceholder"
+            />
+          </label>
 
-        <label class="field">
-          <span class="field-inline">
-            <span data-i18n="modalPortLabel">РџРѕСЂС‚ СЃРµСЂРІРµСЂР°</span>
-            <button
-              class="help-badge"
-              type="button"
-              id="port-help"
-              title="Р”Р»СЏ РѕРґРёРЅРѕС‡РЅРѕРіРѕ РјРёСЂР° Minecraft СЌС‚Рѕ LAN-РїРѕСЂС‚, РєРѕС‚РѕСЂС‹Р№ РёРіСЂР° РїРѕРєР°Р·С‹РІР°РµС‚ РїРѕСЃР»Рµ РѕС‚РєСЂС‹С‚РёСЏ РјРёСЂР° РІ Р»РѕРєР°Р»СЊРЅСѓСЋ СЃРµС‚СЊ."
-              aria-label="РџРѕРґСЃРєР°Р·РєР° РїРѕ РїРѕСЂС‚Сѓ"
-            >
-              ?
-            </button>
-          </span>
-          <input id="local-game-port" type="number" min="1" max="65535" value="25565" />
-        </label>
+          <label class="field">
+            <span class="field-inline">
+              <span data-i18n="modalPortLabel">Локальный Java-порт</span>
+              <div class="field-inline-actions">
+                <button id="auto-detect-port" class="mini-button" type="button" data-i18n="modalAutoPortButton">
+                  Auto
+                </button>
+                <button class="help-badge" type="button" id="port-help" aria-label="Port help">?</button>
+              </div>
+            </span>
+            <input id="local-game-port" type="number" min="1" max="65535" value="25565" />
+          </label>
 
-        <label class="checkbox-row">
-          <input id="require-password" type="checkbox" />
-          <span data-i18n="modalRequirePassword">РўСЂРµР±РѕРІР°С‚СЊ РїР°СЂРѕР»СЊ</span>
-        </label>
+          <label class="checkbox-row">
+            <input id="require-password" type="checkbox" />
+            <span data-i18n="modalRequirePassword">Требовать пароль</span>
+          </label>
 
-        <label class="checkbox-row">
-          <input id="use-yggstack" type="checkbox" checked />
-          <span>Запустить через Yggstack</span>
-        </label>
+          <label id="password-field-group" class="field hidden">
+            <span data-i18n="modalPasswordLabel">Пароль комнаты</span>
+            <input
+              id="room-password"
+              type="password"
+              maxlength="64"
+              placeholder="Введите пароль"
+              data-i18n-placeholder="modalPasswordPlaceholder"
+            />
+          </label>
 
-        <label id="password-field-group" class="field hidden">
-          <span data-i18n="modalPasswordLabel">РџР°СЂРѕР»СЊ</span>
-          <input
-            id="room-password"
-            type="password"
-            maxlength="32"
-            placeholder="••••••••"
-            data-i18n-placeholder="modalPasswordPlaceholder"
-          />
-        </label>
+          <label class="checkbox-row">
+            <input id="enable-geyser" type="checkbox" />
+            <span data-i18n="modalGeyserToggle">Включить Bedrock bridge (Geyser)</span>
+          </label>
+
+          <p class="modal-copy" data-i18n="modalGeyserDescription">
+            Поднимает встроенный мост Bedrock -> Java. Bedrock-клиенты смогут подключаться на указанный UDP-порт.
+          </p>
+
+          <label id="geyser-port-field" class="field hidden">
+            <span data-i18n="modalBedrockPortLabel">Bedrock UDP-порт</span>
+            <input id="geyser-port" type="number" min="1" max="65535" value="19132" />
+          </label>
+        </div>
 
         <div class="modal-actions">
-          <button id="close-modal-secondary" class="secondary-button" type="button" data-i18n="cancelButton">
-            РћРўРњР•РќРђ
+          <button id="close-modal-secondary" class="ghost-button" type="button" data-i18n="cancelButton">
+            Отмена
           </button>
-          <button id="host-button" class="gradient-button small" type="button" data-i18n="modalHostButton">
-            РҐРћРЎРўРРўР¬
+          <button id="host-button" class="primary-button" type="button" data-i18n="modalHostButton">
+            Запустить хост
           </button>
-        </div>
-      </div>
-    </div>
-
-    <div id="profile-modal" class="modal-shell hidden" aria-hidden="true">
-      <div class="modal-backdrop" data-close-profile-modal="true"></div>
-      <div class="modal-card profile-modal-card" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title">
-        <div class="panel-header">
-          <div>
-            <p class="section-label">ПРОФИЛЬ И OVERLAY</p>
-            <h2 id="profile-modal-title">Первичная настройка</h2>
-          </div>
-          <button id="close-profile-modal" class="icon-button" type="button" aria-label="Закрыть">×</button>
-        </div>
-
-        <div class="profile-modal-layout">
-          <div class="profile-preview-card profile-preview-card-modal">
-            <div id="profile-avatar-preview" class="profile-preview-avatar">BP</div>
-            <div class="profile-preview-copy">
-              <strong>Как вас увидят другие игроки</strong>
-              <span>Ник, аватар и сочетание клавиш можно будет поменять позже в настройках.</span>
-            </div>
-          </div>
-
-          <label class="field">
-            <span>Ник игрока</span>
-            <input id="profile-nickname-input" type="text" maxlength="24" placeholder="Введите ваш ник" />
-          </label>
-
-          <label class="field">
-            <span>Аватар</span>
-            <input id="profile-avatar-input" type="file" accept="image/*" />
-          </label>
-
-          <label class="field">
-            <span>Горячая клавиша overlay</span>
-            <input id="profile-shortcut-input" type="text" maxlength="32" placeholder="SHIFT+TAB" readonly />
-          </label>
-        </div>
-
-        <div class="modal-actions profile-actions">
-          <button id="close-profile-modal-secondary" class="secondary-button" type="button">Позже</button>
-          <button id="save-profile-modal" class="gradient-button small" type="button">Сохранить</button>
         </div>
       </div>
     </div>
@@ -457,6 +405,3 @@
     <script type="module" src="./main.js"></script>
   </body>
 </html>
-
-
-
