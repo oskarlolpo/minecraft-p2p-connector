@@ -1,4 +1,4 @@
-import * as Ably from "ably";
+﻿import * as Ably from "ably";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -274,7 +274,7 @@ function renderShortcutCaptureState() {
   overlayShortcutChipEl?.classList.toggle("capturing", active);
   if (overlayShortcutChipEl) {
     overlayShortcutChipEl.textContent = active
-      ? "Нажмите клавишу"
+      ? "РќР°Р¶РјРёС‚Рµ РєР»Р°РІРёС€Сѓ"
       : normalizedShortcut(state.preferences.profile.overlayShortcut);
   }
 }
@@ -294,7 +294,7 @@ async function persistOverlayShortcut(shortcut) {
   });
   syncProfileSurface();
   rerender();
-  addLog(`Горячая клавиша overlay изменена: ${normalized}.`);
+  addLog(`Р“РѕСЂСЏС‡Р°СЏ РєР»Р°РІРёС€Р° overlay РёР·РјРµРЅРµРЅР°: ${normalized}.`);
 }
 
 function startShortcutCapture(source = "chip") {
@@ -313,7 +313,7 @@ function avatarMarkup(label = currentNickname(), avatarDataUrl = state.preferenc
     return `<img class="host-avatar-image" src="${avatarDataUrl}" alt="${escapeHtml(label)}" />`;
   }
   const initials = String(label || "MC")
-    .replace(/§.|&./g, "")
+    .replace(/В§.|&./g, "")
     .trim()
     .split(/\s+/)
     .slice(0, 2)
@@ -369,7 +369,7 @@ function renderMinecraftFormattedText(raw) {
   for (let index = 0; index < value.length; index += 1) {
     const symbol = value[index];
     const next = value[index + 1]?.toLowerCase();
-    if ((symbol === "§" || symbol === "&") && next) {
+    if ((symbol === "В§" || symbol === "&") && next) {
       flush();
       if (MINECRAFT_COLOR_MAP[next]) {
         style = { color: MINECRAFT_COLOR_MAP[next], bold: false, italic: false, underline: false, strike: false };
@@ -406,7 +406,7 @@ function syncProfileSurface() {
   if (topbarProfileNameEl) topbarProfileNameEl.textContent = nickname;
   if (settingsProfileNameEl) settingsProfileNameEl.textContent = nickname;
   if (settingsProfileSubtitleEl) {
-    settingsProfileSubtitleEl.textContent = `Оверлей открывается по ${shortcut}.`;
+    settingsProfileSubtitleEl.textContent = `РћРІРµСЂР»РµР№ РѕС‚РєСЂС‹РІР°РµС‚СЃСЏ РїРѕ ${shortcut}.`;
   }
   setInputValueUnlessFocused(settingsNicknameEl, state.preferences.profile.nickname ?? "");
   setInputValueUnlessFocused(settingsShortcutInputEl, shortcut);
@@ -420,7 +420,7 @@ function syncProfileSurface() {
 async function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Не удалось прочитать файл аватара."));
+    reader.onerror = () => reject(new Error("РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕС‡РёС‚Р°С‚СЊ С„Р°Р№Р» Р°РІР°С‚Р°СЂР°."));
     reader.onload = () => resolve(String(reader.result ?? ""));
     reader.readAsDataURL(file);
   });
@@ -484,7 +484,7 @@ async function persistProfileFromFields(nicknameEl, shortcutEl, avatarInputEl, {
   if (profileAvatarInputEl) profileAvatarInputEl.value = "";
   syncProfileSurface();
   rerender();
-  addLog(`Профиль сохранён. Overlay shortcut: ${payload.overlayShortcut}.`);
+  addLog(`РџСЂРѕС„РёР»СЊ СЃРѕС…СЂР°РЅС‘РЅ. Overlay shortcut: ${payload.overlayShortcut}.`);
   if (closeAfter) closeProfileModal();
 }
 
@@ -497,7 +497,7 @@ async function hydrateProfile() {
     if (profile?.theme) state.preferences.theme = profile.theme;
     if (profile?.language) state.preferences.language = profile.language;
   } catch (error) {
-    addLog(`Не удалось загрузить профиль из backend: ${String(error)}`);
+    addLog(`РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РїСЂРѕС„РёР»СЊ РёР· backend: ${String(error)}`);
   }
 
   document.body.dataset.theme = state.preferences.theme;
@@ -639,7 +639,7 @@ function formatTransportLabel(transport) {
   if (transport === "relay-circuit" || transport === "relay-reservation") return "Circuit Relay v2";
   if (transport === "direct-hole-punch") return "DCUtR hole punch";
   if (transport === "direct" || transport === "direct-quic") return "Direct QUIC";
-  return transport ?? "неизвестный транспорт";
+  return transport ?? "РЅРµРёР·РІРµСЃС‚РЅС‹Р№ С‚СЂР°РЅСЃРїРѕСЂС‚";
 }
 
 function getSelectedServer() {
@@ -716,10 +716,10 @@ function renderSelectedServer() {
   selectedEndpointEl.textContent = selected?.peerAddr ?? "n/a";
   selectedMetaEl.textContent = selected
     ? t("selectedMetaTemplate", {
-        host: `${selected.hostName}${selected.clientId === localClientId ? " (you)" : ""} · ${selected.peerId}`,
+        host: `${selected.hostName}${selected.clientId === localClientId ? " (you)" : ""} В· ${selected.peerId}`,
         version: selected.minecraftVersion ?? t("serverUnknownVersion"),
         slots: selected.slots,
-        password: `${selected.hasPassword ? t("selectedMetaPassword") : ""}${selected.yggReady ? " · Yggstack" : ""}`,
+        password: `${selected.hasPassword ? t("selectedMetaPassword") : ""}${selected.yggReady ? " В· Yggstack" : ""}`,
       })
     : t("selectedMetaEmpty");
 }
@@ -728,12 +728,16 @@ function renderYggstackRuntimeLegacy(info) {
   state.yggstackInfo = info ?? null;
   if (!yggstackStatusEl) return;
   if (!info) {
-    yggstackStatusEl.textContent = "Yggstack: runtime ещё не проверен.";
+    yggstackStatusEl.textContent = "Yggstack: runtime РµС‰С‘ РЅРµ РїСЂРѕРІРµСЂРµРЅ.";
     return;
   }
 
-  const stateLabel = info.running ? "sidecar запущен" : info.ready ? "runtime готов" : "runtime не готов";
+  const stateLabel = info.running ? "sidecar Р·Р°РїСѓС‰РµРЅ" : info.ready ? "runtime РіРѕС‚РѕРІ" : "runtime РЅРµ РіРѕС‚РѕРІ";
   yggstackStatusEl.textContent = `Yggstack: ${stateLabel}. ${info.note ?? ""}`.trim();
+}
+
+function renderYggstackRuntime(info) {
+  renderYggstackRuntimeLegacy(info);
 }
 
 function syncButtons() {
@@ -780,7 +784,7 @@ function renderSessionCard() {
     activeHostCardEl.className = "active-host-card";
     activeHostCardEl.innerHTML = `
       <div class="active-host-layout">
-        <div class="host-avatar">⇄</div>
+        <div class="host-avatar">в‡„</div>
         <div class="host-details">
           <h3>${escapeHtml(t("clientCardTitle"))}</h3>
           <p>${escapeHtml(t("clientCardDescription", { peer: status?.peers?.[0]?.addr ?? "n/a" }))}</p>
@@ -848,7 +852,7 @@ function renderPeers(peers) {
           <div class="player-main">
             <strong>${escapeHtml(peer.peerId)}</strong>
             <span>${escapeHtml(peer.addr)}</span>
-            <span>${peer.connected ? "online" : "pending"} · ${peer.pingMs == null ? "n/a" : `${peer.pingMs} ms`}</span>
+            <span>${peer.connected ? "online" : "pending"} В· ${peer.pingMs == null ? "n/a" : `${peer.pingMs} ms`}</span>
           </div>
           <div class="player-actions">
             ${
@@ -885,9 +889,9 @@ function renderServers() {
           <div class="server-main">
             <div class="server-main-top">
               <strong class="minecraft-name">${renderMinecraftFormattedText(server.roomName)}</strong>
-              <span class="row-chip">${server.yggReady ? "YGG" : server.hasPassword ? "🔒" : "⚔"}</span>
+              <span class="row-chip">${server.yggReady ? "YGG" : server.hasPassword ? "рџ”’" : "вљ”"}</span>
             </div>
-            <span>${escapeHtml(server.hostName)}${isLocal ? ` · ${escapeHtml(t("selfHostLabel"))}` : ""}</span>
+            <span>${escapeHtml(server.hostName)}${isLocal ? ` В· ${escapeHtml(t("selfHostLabel"))}` : ""}</span>
           </div>
           <div class="server-main">
             <strong>${escapeHtml(server.minecraftVersion ?? t("serverUnknownVersion"))}</strong>
@@ -1029,10 +1033,10 @@ function renderStatus(status) {
   if (overlayStatusLineEl) {
     overlayStatusLineEl.textContent =
       status.mode === "client" && state.tunnelReady
-        ? `Туннель активен: ${formatTransportLabel(status.transportPath ?? state.activeTunnelTransport)}. Подключайтесь к localhost:25565.`
+        ? `РўСѓРЅРЅРµР»СЊ Р°РєС‚РёРІРµРЅ: ${formatTransportLabel(status.transportPath ?? state.activeTunnelTransport)}. РџРѕРґРєР»СЋС‡Р°Р№С‚РµСЃСЊ Рє localhost:25565.`
         : status.mode === "host"
-          ? `Комната ${status.roomCode ?? "без имени"} опубликована. Ждём подключения игроков.`
-          : `Оверлей скрыт в трее. Открывайте его по ${normalizedShortcut(state.preferences.profile.overlayShortcut)}.`;
+          ? `РљРѕРјРЅР°С‚Р° ${status.roomCode ?? "Р±РµР· РёРјРµРЅРё"} РѕРїСѓР±Р»РёРєРѕРІР°РЅР°. Р–РґС‘Рј РїРѕРґРєР»СЋС‡РµРЅРёСЏ РёРіСЂРѕРєРѕРІ.`
+          : `РћРІРµСЂР»РµР№ СЃРєСЂС‹С‚ РІ С‚СЂРµРµ. РћС‚РєСЂС‹РІР°Р№С‚Рµ РµРіРѕ РїРѕ ${normalizedShortcut(state.preferences.profile.overlayShortcut)}.`;
   }
   syncProfileSurface();
   syncButtons();
@@ -1203,8 +1207,8 @@ async function runPreflightCheck({ silent = false } = {}) {
 
   if (!silent) {
     addLog(
-      `Preflight ${report.reachable ? "OK" : "FAIL"} для 127.0.0.1:${report.localPort}. ${
-        report.minecraftVersion ? `Версия: ${report.minecraftVersion}.` : "Версия не определилась."
+      `Preflight ${report.reachable ? "OK" : "FAIL"} РґР»СЏ 127.0.0.1:${report.localPort}. ${
+        report.minecraftVersion ? `Р’РµСЂСЃРёСЏ: ${report.minecraftVersion}.` : "Р’РµСЂСЃРёСЏ РЅРµ РѕРїСЂРµРґРµР»РёР»Р°СЃСЊ."
       }`,
     );
     addLog(report.recommendedHostAction);
@@ -1217,15 +1221,15 @@ async function runPreflightCheck({ silent = false } = {}) {
 async function startEmbeddedTestServer() {
   const port = Number(testServerPortEl.value || 25566);
   if (port === Number(localGamePortEl.value || 25565)) {
-    addLog("Диагностический сервер нельзя запускать на том же порту, что и Minecraft. Используйте отдельный порт, например 25566.");
+    addLog("Р”РёР°РіРЅРѕСЃС‚РёС‡РµСЃРєРёР№ СЃРµСЂРІРµСЂ РЅРµР»СЊР·СЏ Р·Р°РїСѓСЃРєР°С‚СЊ РЅР° С‚РѕРј Р¶Рµ РїРѕСЂС‚Сѓ, С‡С‚Рѕ Рё Minecraft. РСЃРїРѕР»СЊР·СѓР№С‚Рµ РѕС‚РґРµР»СЊРЅС‹Р№ РїРѕСЂС‚, РЅР°РїСЂРёРјРµСЂ 25566.");
     return;
   }
   try {
     const info = await invoke("start_test_server", { port });
     state.testServerInfo = info;
-    addLog(`Тестовый сервер запущен на ${info.bindAddr}. Протокол: ${info.protocol}.`);
+    addLog(`РўРµСЃС‚РѕРІС‹Р№ СЃРµСЂРІРµСЂ Р·Р°РїСѓС‰РµРЅ РЅР° ${info.bindAddr}. РџСЂРѕС‚РѕРєРѕР»: ${info.protocol}.`);
   } catch (error) {
-    addLog(`Не удалось запустить тестовый сервер: ${String(error)}`);
+    addLog(`РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїСѓСЃС‚РёС‚СЊ С‚РµСЃС‚РѕРІС‹Р№ СЃРµСЂРІРµСЂ: ${String(error)}`);
   }
 }
 
@@ -1233,9 +1237,9 @@ async function stopEmbeddedTestServer() {
   try {
     await invoke("stop_test_server");
     state.testServerInfo = null;
-    addLog("Тестовый сервер остановлен.");
+    addLog("РўРµСЃС‚РѕРІС‹Р№ СЃРµСЂРІРµСЂ РѕСЃС‚Р°РЅРѕРІР»РµРЅ.");
   } catch (error) {
-    addLog(`Не удалось остановить тестовый сервер: ${String(error)}`);
+    addLog(`РќРµ СѓРґР°Р»РѕСЃСЊ РѕСЃС‚Р°РЅРѕРІРёС‚СЊ С‚РµСЃС‚РѕРІС‹Р№ СЃРµСЂРІРµСЂ: ${String(error)}`);
   }
 }
 
@@ -1245,10 +1249,32 @@ async function copyDiagnosticsSnapshot() {
     await invoke("run_network_self_check_command");
     const snapshot = await invoke("export_diagnostics_snapshot", { localPort });
     await navigator.clipboard.writeText(JSON.stringify(snapshot, null, 2));
-    addLog("Полная диагностика скопирована в буфер обмена.");
+    addLog("РџРѕР»РЅР°СЏ РґРёР°РіРЅРѕСЃС‚РёРєР° СЃРєРѕРїРёСЂРѕРІР°РЅР° РІ Р±СѓС„РµСЂ РѕР±РјРµРЅР°.");
   } catch (error) {
-    addLog(`Не удалось выгрузить диагностику: ${String(error)}`);
+    addLog(`РќРµ СѓРґР°Р»РѕСЃСЊ РІС‹РіСЂСѓР·РёС‚СЊ РґРёР°РіРЅРѕСЃС‚РёРєСѓ: ${String(error)}`);
   }
+}
+
+async function ensureYggstackReady({ autoStart = true, silent = false } = {}) {
+  let info = await invoke("get_yggstack_runtime_info");
+
+  if (!info?.ready) {
+    info = await invoke("prepare_yggstack_runtime");
+    if (!silent) addLog(info?.note ?? "Yggstack runtime подготовлен.");
+  }
+
+  if (autoStart && info?.ready && !info?.running) {
+    info = await invoke("start_yggstack_sidecar");
+    if (!silent) addLog("Yggstack runtime автоматически запущен.");
+  }
+
+  if (typeof renderYggstackRuntime === "function") {
+    renderYggstackRuntime(info);
+  } else if (typeof renderYggstackRuntimeLegacy === "function") {
+    renderYggstackRuntimeLegacy(info);
+  }
+
+  return info;
 }
 
 async function startHosting() {
@@ -1269,7 +1295,7 @@ async function startHosting() {
   try {
     const preflight = await runPreflightCheck({ silent: false });
     if (!preflight.reachable) {
-      addLog("Хост не запущен: локальный Minecraft недоступен. Сначала откройте мир в LAN или запустите тестовый сервер.");
+      addLog("РҐРѕСЃС‚ РЅРµ Р·Р°РїСѓС‰РµРЅ: Р»РѕРєР°Р»СЊРЅС‹Р№ Minecraft РЅРµРґРѕСЃС‚СѓРїРµРЅ. РЎРЅР°С‡Р°Р»Р° РѕС‚РєСЂРѕР№С‚Рµ РјРёСЂ РІ LAN РёР»Рё Р·Р°РїСѓСЃС‚РёС‚Рµ С‚РµСЃС‚РѕРІС‹Р№ СЃРµСЂРІРµСЂ.");
       return;
     }
 
@@ -1320,7 +1346,7 @@ async function startHosting() {
     if (canAdvertiseHost()) {
       await syncPresence(status, { force: true, enter: true });
     } else {
-      addLog("Presence отложен: ждём публичный endpoint от relay или reverse tunnel.");
+      addLog("Presence РѕС‚Р»РѕР¶РµРЅ: Р¶РґС‘Рј РїСѓР±Р»РёС‡РЅС‹Р№ endpoint РѕС‚ relay РёР»Рё reverse tunnel.");
     }
     await refreshLobby();
     closeModal();
@@ -1376,7 +1402,7 @@ async function stopSession() {
 async function startRelayFallback(flow) {
   if (!flow || flow.relayAttempted) return;
   flow.relayAttempted = true;
-  addLog(`Yggstack не поднялся. Перехожу на MQTT relay session ${flow.relaySessionId}.`);
+  addLog(`Yggstack РЅРµ РїРѕРґРЅСЏР»СЃСЏ. РџРµСЂРµС…РѕР¶Сѓ РЅР° MQTT relay session ${flow.relaySessionId}.`);
   try {
     await invoke("start_relay_fallback", {
       peerId: flow.server.peerId,
@@ -1401,12 +1427,12 @@ async function startYggFallback(flow) {
     return;
   }
 
-  addLog(`Direct path не поднялся. Пробую Yggstack fallback через [${remoteYggAddress}]:25565.`);
+  addLog(`Direct path РЅРµ РїРѕРґРЅСЏР»СЃСЏ. РџСЂРѕР±СѓСЋ Yggstack fallback С‡РµСЂРµР· [${remoteYggAddress}]:25565.`);
 
   try {
     const info = await ensureYggstackReady({ autoStart: true, silent: true });
     if (!info?.ready) {
-      addLog(`Yggstack runtime недоступен: ${info?.note ?? "runtime is not ready"}`);
+      addLog(`Yggstack runtime РЅРµРґРѕСЃС‚СѓРїРµРЅ: ${info?.note ?? "runtime is not ready"}`);
       await startRelayFallback(flow);
       return;
     }
@@ -1455,11 +1481,11 @@ async function connectToServer(server) {
     await ensureYggstackReady({ autoStart: true, silent: true });
     addLog(t("connectProgress", { room: server.roomName, addr: server.peerAddr }));
     if (server.yggReady && server.yggAddress) {
-      addLog(`Хост ${server.roomName} публикует Ygg-адрес [${server.yggAddress}].`);
+      addLog(`РҐРѕСЃС‚ ${server.roomName} РїСѓР±Р»РёРєСѓРµС‚ Ygg-Р°РґСЂРµСЃ [${server.yggAddress}].`);
     }
 
     if (server.yggReady && server.yggAddress && server.transportPreference === "yggstack") {
-      addLog(`Комната ${server.roomName} помечена как Yggstack-preferred. Поднимаю Ygg-туннель сразу.`);
+      addLog(`РљРѕРјРЅР°С‚Р° ${server.roomName} РїРѕРјРµС‡РµРЅР° РєР°Рє Yggstack-preferred. РџРѕРґРЅРёРјР°СЋ Ygg-С‚СѓРЅРЅРµР»СЊ СЃСЂР°Р·Сѓ.`);
       const info = await invoke("start_ygg_client_mapping", { remoteYggAddress: server.yggAddress });
       renderYggstackRuntime(info);
       return;
@@ -1619,11 +1645,11 @@ await listen("reverse_tunnel_ready", async (event) => {
 
 await listen("test_server_started", async (event) => {
   state.testServerInfo = event.payload ?? null;
-  addLog(`Тестовый сервер готов: ${event.payload?.bindAddr ?? "n/a"} (${event.payload?.protocol ?? "unknown"}).`);
+  addLog(`РўРµСЃС‚РѕРІС‹Р№ СЃРµСЂРІРµСЂ РіРѕС‚РѕРІ: ${event.payload?.bindAddr ?? "n/a"} (${event.payload?.protocol ?? "unknown"}).`);
 });
 
 await listen("test_server_client_closed", async (event) => {
-  addLog(`Тестовый сервер: клиент ${event.payload ?? "unknown"} завершил соединение.`);
+  addLog(`РўРµСЃС‚РѕРІС‹Р№ СЃРµСЂРІРµСЂ: РєР»РёРµРЅС‚ ${event.payload ?? "unknown"} Р·Р°РІРµСЂС€РёР» СЃРѕРµРґРёРЅРµРЅРёРµ.`);
 });
 
 await listen("relay_active", async (event) => {
@@ -1799,7 +1825,7 @@ clearAvatarButtonEl?.addEventListener("click", async () => {
   if (profileAvatarInputEl) profileAvatarInputEl.value = "";
   saveProfile();
   syncProfileSurface();
-  addLog("Аватар очищен.");
+  addLog("РђРІР°С‚Р°СЂ РѕС‡РёС‰РµРЅ.");
 });
 settingsAvatarInputEl?.addEventListener("change", async () => {
   const file = settingsAvatarInputEl.files?.[0];
@@ -1861,3 +1887,4 @@ setInterval(() => {
 await setupAbly();
 await refreshYggstackRuntime({ silent: true });
 await pollStatus();
+
