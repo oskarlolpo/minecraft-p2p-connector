@@ -8,13 +8,16 @@ mod models;
 mod network;
 mod signaling;
 
-use network::minecraft::{build_preflight_report, detect_lan_port_from_logs, probe_external_server};
+use network::minecraft::{
+    build_preflight_report, detect_lan_port_from_logs, detect_minecraft_nickname, probe_external_server,
+};
 use network::manager::NetworkManager;
 use network::geyser::GeyserManager;
 use network::test_server::{probe_test_server, TestServerManager};
 use models::{
     AppInfo, DiagnosticSnapshot, ExternalServerProbe, InstallUpdateResult, LanPortDetection,
-    NetworkStatus, PreflightReport, SwarmBootstrap, TestServerInfo, UpdateCheckResult,
+    MinecraftNicknameDetection, NetworkStatus, PreflightReport, SwarmBootstrap, TestServerInfo,
+    UpdateCheckResult,
 };
 use std::{path::PathBuf, process::Command, time::{SystemTime, UNIX_EPOCH}};
 use tauri::{AppHandle, State};
@@ -165,6 +168,13 @@ async fn run_preflight(local_port: u16) -> Result<models::PreflightReport, Strin
 #[tauri::command]
 async fn detect_lan_port() -> Result<LanPortDetection, String> {
     detect_lan_port_from_logs()
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn detect_minecraft_nickname_command() -> Result<MinecraftNicknameDetection, String> {
+    detect_minecraft_nickname()
         .await
         .map_err(|error| format!("{error:#}"))
 }
@@ -372,6 +382,7 @@ fn main() {
             get_status,
             run_preflight,
             detect_lan_port,
+            detect_minecraft_nickname_command,
             query_external_server,
             get_app_info,
             check_for_updates,

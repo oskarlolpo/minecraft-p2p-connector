@@ -199,7 +199,8 @@ fn spawn_geyser_process(
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
+        // CREATE_NO_WINDOW | DETACHED_PROCESS
+        command.creation_flags(0x0800_0000 | 0x0000_0008);
     }
 
     command

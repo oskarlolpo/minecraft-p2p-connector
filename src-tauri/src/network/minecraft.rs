@@ -11,7 +11,7 @@ use tokio::{
     time::{timeout, Duration},
 };
 
-use crate::models::{ExternalServerProbe, LanPortDetection, LocalTargetState, PreflightReport};
+use crate::models::{ExternalServerProbe, LanPortDetection, LocalTargetState, MinecraftNicknameDetection, PreflightReport};
 
 const STATUS_PROTOCOL_CANDIDATES: &[i32] = &[767, 764, 760, 47];
 
@@ -109,6 +109,12 @@ pub async fn detect_lan_port_from_logs() -> Result<LanPortDetection> {
     task::spawn_blocking(detect_lan_port_from_logs_blocking)
         .await
         .context("failed to await Minecraft LAN port detector task")?
+}
+
+pub async fn detect_minecraft_nickname() -> Result<MinecraftNicknameDetection> {
+    task::spawn_blocking(detect_minecraft_nickname_blocking)
+        .await
+        .context("failed to await Minecraft nickname detector task")?
 }
 
 async fn query_status(host: &str, port: u16, protocol_version: i32) -> Result<StatusResponse> {
@@ -276,6 +282,8 @@ fn extract_port_from_line(line: &str) -> Option<u16> {
         "Started serving on port ",
         "Local game hosted on port ",
         "Local server started on port ",
+        "Порт локального сервера: ",
+        "Local server port: ",
     ] {
         if let Some(index) = line.find(marker) {
             let port_part = &line[index + marker.len()..];
@@ -285,6 +293,107 @@ fn extract_port_from_line(line: &str) -> Option<u16> {
                 .collect::<String>();
             if let Ok(port) = digits.parse() {
                 return Some(port);
+            }
+        }
+    }
+    None
+}
+
+fn detect_minecraft_nickname_blocking() -> Result<MinecraftNicknameDetection> {
+    let candidates = collect_nickname_sources();
+    for path in candidates {
+        if !path.exists() {
+            continue;
+        }
+        if let Ok(contents) = fs::read_to_string(&path) {
+            if let Some(nickname) = parse_nickname_from_file(&path, &contents) {
+                return Ok(MinecraftNicknameDetection {
+                    nickname,
+                    source_path: path.display().to_string(),
+                });
+            }
+        }
+    }
+    Err(anyhow!("could not detect minecraft nickname from launcher files or logs"))
+}
+
+fn collect_nickname_sources() -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if let Some(app_data) = std::env::var_os("APPDATA") {
+        let app_data = PathBuf::from(app_data);
+        files.push(app_data.join(".minecraft").join("launcher_accounts.json"));
+        files.push(app_data.join(".minecraft").join("launcher_profiles.json"));
+        files.push(app_data.join(".minecraft").join("logs").join("latest.log"));
+    }
+    if let Some(user_profile) = std::env::var_os("USERPROFILE") {
+        let user_profile = PathBuf::from(user_profile);
+        files.push(
+            user_profile
+                .join("AppData")
+                .join("Roaming")
+                .join(".minecraft")
+                .join("logs")
+                .join("latest.log"),
+        );
+    }
+    files
+}
+
+fn parse_nickname_from_file(path: &Path, contents: &str) -> Option<String> {
+    let name = path.file_name()?.to_string_lossy().to_lowercase();
+    if name == "launcher_accounts.json" {
+        return parse_launcher_accounts_nick(contents);
+    }
+    if name == "launcher_profiles.json" {
+        return parse_launcher_profiles_nick(contents);
+    }
+    parse_logs_nick(contents)
+}
+
+fn parse_launcher_accounts_nick(contents: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(contents).ok()?;
+    let active_id = value.get("activeAccountLocalId")?.as_str()?;
+    value.get("accounts")?
+        .get(active_id)?
+        .get("minecraftProfile")?
+        .get("name")?
+        .as_str()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+}
+
+fn parse_launcher_profiles_nick(contents: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(contents).ok()?;
+    let selected_profile = value
+        .get("selectedUser")
+        .and_then(|item| item.get("profile"))
+        .and_then(|item| item.as_str())?;
+    let auth_db = value.get("authenticationDatabase")?.as_object()?;
+    for account in auth_db.values() {
+        if let Some(display_name) = account
+            .get("profiles")
+            .and_then(|profiles| profiles.get(selected_profile))
+            .and_then(|profile| profile.get("displayName"))
+            .and_then(|name| name.as_str())
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+        {
+            return Some(display_name);
+        }
+    }
+    None
+}
+
+fn parse_logs_nick(contents: &str) -> Option<String> {
+    for line in contents.lines().rev() {
+        if let Some(index) = line.find("Setting user: ") {
+            let part = &line[index + "Setting user: ".len()..];
+            let nick = part
+                .chars()
+                .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+                .collect::<String>();
+            if !nick.is_empty() {
+                return Some(nick);
             }
         }
     }

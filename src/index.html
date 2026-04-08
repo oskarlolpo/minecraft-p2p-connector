@@ -10,53 +10,39 @@
     <div class="app-shell">
       <aside class="sidebar">
         <div class="sidebar-brand-block">
-          <div class="brand-mark">
-            <img src="./assets/icons/banana-stroke-rounded.svg" alt="" />
-          </div>
+          <button id="profile-menu-trigger" class="brand-mark avatar-trigger" type="button" aria-label="Open profile">
+            <img id="brand-avatar-image" class="hidden" alt="" />
+            <span id="brand-avatar-fallback">P</span>
+          </button>
           <div class="brand-copy">
             <span class="brand-label">Minecraft P2P Connector</span>
             <strong id="brand-user-name">Player</strong>
           </div>
-          <div class="profile-menu-shell">
-            <button id="profile-menu-trigger" class="avatar-trigger" type="button" aria-label="Open profile">
-              <img id="brand-avatar-image" class="hidden" alt="" />
-              <span id="brand-avatar-fallback">P</span>
-            </button>
-            <div id="profile-menu" class="profile-menu hidden">
-              <div class="profile-menu-head">
-                <strong data-i18n="profileMenuTitle">Профиль</strong>
-              </div>
-              <label class="field compact-field">
-                <span data-i18n="profileNicknameLabel">Ник в приложении</span>
-                <input
-                  id="profile-nickname"
-                  type="text"
-                  maxlength="32"
-                  placeholder="Oskar"
-                  data-i18n-placeholder="profileNicknamePlaceholder"
-                />
-              </label>
-              <label class="field compact-field">
-                <span data-i18n="profileMinecraftNicknameLabel">Ник в Minecraft</span>
-                <input
-                  id="profile-minecraft-nickname"
-                  type="text"
-                  maxlength="32"
-                  placeholder="Steve"
-                  data-i18n-placeholder="profileMinecraftNicknamePlaceholder"
-                />
-              </label>
-              <div class="avatar-picker-row">
-                <span data-i18n="profileAvatarLabel">Аватарка</span>
-                <button id="choose-avatar" class="ghost-button" type="button" data-i18n="profileChooseAvatar">
-                  Выбрать файл
-                </button>
-              </div>
-              <input id="profile-avatar-file" class="visually-hidden" type="file" accept="image/*" />
-              <button id="save-profile" class="primary-button profile-save-button" type="button" data-i18n="profileSaveButton">
-                Сохранить
-              </button>
+          <div id="profile-menu" class="profile-menu hidden">
+            <div class="profile-menu-head">
+              <strong data-i18n="profileMenuTitle">Профиль</strong>
             </div>
+            <label class="field compact-field">
+              <span data-i18n="profileNicknameLabel">Ник в приложении</span>
+              <input id="profile-nickname" type="text" maxlength="32" placeholder="Player" data-i18n-placeholder="profileNicknamePlaceholder" />
+            </label>
+            <label class="field compact-field">
+              <span data-i18n="profileMinecraftNicknameLabel">Ник в Minecraft</span>
+              <input
+                id="profile-minecraft-nickname"
+                type="text"
+                maxlength="32"
+                readonly
+                placeholder="Автоопределение"
+                data-i18n-placeholder="profileMinecraftNicknamePlaceholder"
+              />
+            </label>
+            <div class="avatar-picker-row">
+              <span data-i18n="profileAvatarLabel">Аватарка</span>
+              <button id="choose-avatar" class="ghost-button" type="button" data-i18n="profileChooseAvatar">Выбрать файл</button>
+            </div>
+            <input id="profile-avatar-file" class="visually-hidden" type="file" accept="image/*" />
+            <button id="save-profile" class="primary-button profile-save-button" type="button" data-i18n="profileSaveButton">Сохранить</button>
           </div>
         </div>
 
@@ -78,12 +64,8 @@
             <div class="hero-left">
               <h1 data-i18n="appTitle">Minecraft P2P Connector</h1>
               <div class="hero-actions">
-                <button id="open-host-modal" class="primary-button" type="button" data-i18n="hostServerButton">
-                  Создать хост
-                </button>
-                <button id="refresh-lobby" class="ghost-button" type="button" data-i18n="refreshButton">
-                  Обновить лобби
-                </button>
+                <button id="open-host-modal" class="primary-button" type="button" data-i18n="hostServerButton">Создать хост</button>
+                <button id="refresh-lobby" class="ghost-button" type="button" data-i18n="refreshButton">Обновить лобби</button>
               </div>
             </div>
             <div class="hero-right">
@@ -92,9 +74,7 @@
                 <strong id="connection-state">ОЖИДАНИЕ</strong>
                 <span id="ably-state">connecting</span>
               </div>
-              <p id="host-lock-note" class="hero-note" data-i18n="hostNoteIdle">
-                Запустите хост, чтобы опубликовать локальный мир или сервер.
-              </p>
+              <p id="host-lock-note" class="hero-note" data-i18n="hostNoteIdle">Запустите хост, чтобы опубликовать локальный мир или сервер.</p>
             </div>
           </header>
 
@@ -105,9 +85,7 @@
                   <div>
                     <h2 id="host-section-title" data-i18n="activeHostTitle">Активная сессия</h2>
                   </div>
-                  <button id="stop-button" class="ghost-button danger-button" type="button" data-i18n="stopButton">
-                    Остановить
-                  </button>
+                  <button id="stop-button" class="ghost-button danger-button" type="button" data-i18n="stopButton">Остановить</button>
                 </div>
                 <div id="active-host-card" class="active-host-card empty"></div>
                 <div class="row-head players-head">
@@ -178,15 +156,11 @@
                   </div>
                   <p id="selected-meta" class="panel-copy" data-i18n="selectedMetaEmpty">Выберите сервер из списка.</p>
                   <div class="hero-actions compact">
-                    <button id="copy-selected-endpoint" class="ghost-button" type="button" data-i18n="copyIpButton">
-                      Скопировать Java IP
-                    </button>
+                    <button id="copy-selected-endpoint" class="ghost-button" type="button" data-i18n="copyIpButton">Скопировать Java IP</button>
                     <button id="copy-selected-bedrock-endpoint" class="ghost-button" type="button" data-i18n="copyBedrockIpButton">
                       Скопировать Bedrock IP
                     </button>
-                    <button id="connect-selected" class="primary-button" type="button" data-i18n="connectButton">
-                      Подключиться
-                    </button>
+                    <button id="connect-selected" class="primary-button" type="button" data-i18n="connectButton">Подключиться</button>
                   </div>
                 </div>
               </section>
@@ -211,18 +185,10 @@
                   <input id="test-server-port" type="number" min="1" max="65535" value="25566" />
                 </label>
                 <div class="tool-grid">
-                  <button id="run-preflight" class="ghost-button" type="button" data-i18n="diagnosticsRunPreflight">
-                    Проверить Minecraft
-                  </button>
-                  <button id="start-test-server" class="ghost-button" type="button" data-i18n="diagnosticsStartTestServer">
-                    Запустить тестовый сервер
-                  </button>
-                  <button id="stop-test-server" class="ghost-button" type="button" data-i18n="diagnosticsStopTestServer">
-                    Остановить тестовый сервер
-                  </button>
-                  <button id="probe-test-server" class="ghost-button" type="button" data-i18n="diagnosticsProbeTestServer">
-                    Проверить тестовый сервер
-                  </button>
+                  <button id="run-preflight" class="ghost-button" type="button" data-i18n="diagnosticsRunPreflight">Проверить Minecraft</button>
+                  <button id="start-test-server" class="ghost-button" type="button" data-i18n="diagnosticsStartTestServer">Запустить тестовый сервер</button>
+                  <button id="stop-test-server" class="ghost-button" type="button" data-i18n="diagnosticsStopTestServer">Остановить тестовый сервер</button>
+                  <button id="probe-test-server" class="ghost-button" type="button" data-i18n="diagnosticsProbeTestServer">Проверить тестовый сервер</button>
                 </div>
               </section>
             </div>
@@ -287,12 +253,8 @@
                   <h2 data-i18n="updatesSectionTitle">Обновления</h2>
                 </div>
                 <div class="hero-actions compact">
-                  <button id="check-updates" class="ghost-button" type="button" data-i18n="updatesCheckButton">
-                    Проверить обновления
-                  </button>
-                  <button id="install-update" class="primary-button hidden" type="button" data-i18n="updatesInstallButton">
-                    Установить
-                  </button>
+                  <button id="check-updates" class="ghost-button" type="button" data-i18n="updatesCheckButton">Проверить обновления</button>
+                  <button id="install-update" class="primary-button hidden" type="button" data-i18n="updatesInstallButton">Установить</button>
                 </div>
               </div>
               <div id="update-status" class="panel-copy">—</div>
@@ -304,12 +266,8 @@
                   <h2 data-i18n="settingsLogsTitle">Логи приложения</h2>
                 </div>
                 <div class="hero-actions compact">
-                  <button id="copy-logs" class="ghost-button" type="button" data-i18n="copyLogButton">
-                    Скопировать лог
-                  </button>
-                  <button id="copy-diagnostics" class="ghost-button" type="button" data-i18n="copyDiagnosticsButton">
-                    Скопировать JSON лог
-                  </button>
+                  <button id="copy-logs" class="ghost-button" type="button" data-i18n="copyLogButton">Скопировать лог</button>
+                  <button id="copy-diagnostics" class="ghost-button" type="button" data-i18n="copyDiagnosticsButton">Скопировать JSON лог</button>
                 </div>
               </div>
               <div id="logs" class="log-list"></div>
@@ -333,13 +291,7 @@
         <div class="modal-grid">
           <label class="field">
             <span data-i18n="modalServerNameLabel">Название сервера</span>
-            <input
-              id="room-name"
-              type="text"
-              maxlength="32"
-              placeholder="Northern Lights SMP"
-              data-i18n-placeholder="modalServerNamePlaceholder"
-            />
+            <input id="room-name" type="text" maxlength="32" placeholder="Northern Lights SMP" data-i18n-placeholder="modalServerNamePlaceholder" />
           </label>
 
           <label class="field">
@@ -360,13 +312,7 @@
 
           <label id="password-field-group" class="field hidden">
             <span data-i18n="modalPasswordLabel">Пароль комнаты</span>
-            <input
-              id="room-password"
-              type="password"
-              maxlength="64"
-              placeholder="Введите пароль"
-              data-i18n-placeholder="modalPasswordPlaceholder"
-            />
+            <input id="room-password" type="password" maxlength="64" placeholder="Введите пароль" data-i18n-placeholder="modalPasswordPlaceholder" />
           </label>
 
           <label class="checkbox-row">
@@ -385,13 +331,14 @@
           </label>
 
           <label id="external-host-address-field" class="field hidden">
-            <span data-i18n="modalExternalHostLabel">IP или домен</span>
-            <input id="external-host-address" type="text" maxlength="255" placeholder="mc.example.com" />
-          </label>
-
-          <label id="external-host-port-field" class="field hidden">
-            <span data-i18n="modalExternalPortLabel">Порт</span>
-            <input id="external-host-port" type="number" min="1" max="65535" value="25565" />
+            <span data-i18n="modalExternalAddressLabel">IP или домен (можно с портом)</span>
+            <input
+              id="external-host-address"
+              type="text"
+              maxlength="255"
+              placeholder="play.example.com:25565"
+              data-i18n-placeholder="modalExternalAddressPlaceholder"
+            />
           </label>
         </div>
 

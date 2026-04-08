@@ -1,4 +1,4 @@
-import * as Ably from "ably";
+﻿import * as Ably from "ably";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -78,9 +78,7 @@ const installUpdateEl = document.querySelector("#install-update");
 const updateStatusEl = document.querySelector("#update-status");
 const externalHostModeEl = document.querySelector("#external-host-mode");
 const externalHostAddressFieldEl = document.querySelector("#external-host-address-field");
-const externalHostPortFieldEl = document.querySelector("#external-host-port-field");
 const externalHostAddressEl = document.querySelector("#external-host-address");
-const externalHostPortEl = document.querySelector("#external-host-port");
 
 const PROFILE_STORAGE_KEY = "minecraft-p2p-profile-v1";
 const EXTERNAL_SERVERS_STORAGE_KEY = "minecraft-p2p-external-servers-v1";
@@ -93,6 +91,7 @@ const hostSession = {
   listenAddrs: [],
   peerAddr: null,
   localPort: 25565,
+  maxPlayers: 30,
   minecraftVersion: null,
   presencePayload: null,
   presenceEntered: false,
@@ -120,6 +119,7 @@ const state = {
   externalServers: loadExternalServers(),
   peerProfiles: new Map(),
   updateInfo: null,
+  detectedMinecraftNickname: null,
 };
 
 function ensureClientId() {
@@ -136,11 +136,10 @@ function loadProfile() {
     const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
     const nickname = String(parsed?.nickname || "Player").trim() || "Player";
-    const minecraftNickname = String(parsed?.minecraftNickname || "").trim();
     const avatarDataUrl = typeof parsed?.avatarDataUrl === "string" ? parsed.avatarDataUrl : null;
-    return { nickname, minecraftNickname, avatarDataUrl };
+    return { nickname, avatarDataUrl };
   } catch {
-    return { nickname: "Player", minecraftNickname: "", avatarDataUrl: null };
+    return { nickname: "Player", avatarDataUrl: null };
   }
 }
 
@@ -215,7 +214,6 @@ function syncGeyserField() {
 function syncExternalHostMode() {
   const external = Boolean(externalHostModeEl?.checked);
   externalHostAddressFieldEl?.classList.toggle("hidden", !external);
-  externalHostPortFieldEl?.classList.toggle("hidden", !external);
   localGamePortEl?.closest(".field")?.classList.toggle("hidden", external);
   requirePasswordEl?.closest(".checkbox-row")?.classList.toggle("hidden", external);
   passwordFieldGroupEl?.classList.toggle("hidden", external || !requirePasswordEl.checked);
@@ -228,7 +226,7 @@ function renderProfile() {
   const nickname = state.profile.nickname?.trim() || "Player";
   brandUserNameEl.textContent = nickname;
   profileNicknameEl.value = nickname;
-  profileMinecraftNicknameEl.value = state.profile.minecraftNickname ?? "";
+  profileMinecraftNicknameEl.value = state.detectedMinecraftNickname ?? "";
 
   if (state.profile.avatarDataUrl) {
     brandAvatarImageEl.src = state.profile.avatarDataUrl;
@@ -239,6 +237,19 @@ function renderProfile() {
     brandAvatarImageEl.classList.add("hidden");
     brandAvatarFallbackEl.classList.remove("hidden");
     brandAvatarFallbackEl.textContent = nickname.slice(0, 1).toUpperCase();
+  }
+}
+
+async function detectMinecraftNickname() {
+  try {
+    const detection = await invoke("detect_minecraft_nickname_command");
+    if (!detection?.nickname) return;
+    state.detectedMinecraftNickname = detection.nickname;
+    renderProfile();
+    addLog(t("autoNicknameDetected", { nickname: detection.nickname }));
+  } catch {
+    state.detectedMinecraftNickname = null;
+    renderProfile();
   }
 }
 
@@ -328,6 +339,17 @@ async function installUpdate() {
 function toggleProfileMenu(force) {
   const open = typeof force === "boolean" ? force : profileMenuEl.classList.contains("hidden");
   profileMenuEl.classList.toggle("hidden", !open);
+  if (open) {
+    requestAnimationFrame(() => {
+      profileMenuEl.style.left = "0px";
+      profileMenuEl.style.right = "auto";
+      const rect = profileMenuEl.getBoundingClientRect();
+      const overflowRight = rect.right - window.innerWidth;
+      if (overflowRight > 0) {
+        profileMenuEl.style.left = `${Math.max(0, -overflowRight - 12)}px`;
+      }
+    });
+  }
 }
 
 async function pickAvatarFile() {
@@ -347,7 +369,6 @@ async function handleAvatarChosen() {
 
 function saveProfileFromInputs() {
   state.profile.nickname = profileNicknameEl.value.trim() || "Player";
-  state.profile.minecraftNickname = profileMinecraftNicknameEl.value.trim();
   saveProfileState();
   renderProfile();
   addLog(t("profileSaved"));
@@ -433,7 +454,7 @@ function formatTransportLabel(transport) {
   if (transport === "relay-circuit" || transport === "relay-reservation") return "Circuit Relay v2";
   if (transport === "direct-hole-punch") return "DCUtR hole punch";
   if (transport === "direct" || transport === "direct-quic") return "Direct libp2p";
-  return transport ?? "неизвестный транспорт";
+  return transport ?? "unknown transport";
 }
 
 function getSelectedServer() {
@@ -541,12 +562,13 @@ function renderSelectedServer() {
   const selected = getSelectedServer();
   const bedrockEndpoint =
     selected?.bedrockEndpoint ?? (selected ? deriveBedrockEndpoint(selected.peerAddr, selected.bedrockPort) : null);
+  const javaEndpoint = selected?.peerAddr ? toSocketEndpoint(selected.peerAddr) ?? selected.peerAddr : null;
   selectedServerEl.textContent = selected ? selected.roomName : t("noSelection");
-  selectedEndpointEl.textContent = selected?.peerAddr ?? "n/a";
+  selectedEndpointEl.textContent = javaEndpoint ?? "n/a";
   selectedBedrockEndpointEl.textContent = bedrockEndpoint ?? "n/a";
   selectedMetaEl.textContent = selected
     ? t("selectedMetaTemplate", {
-        host: `${selected.hostName}${selected.clientId === localClientId ? ` (${t("selfHostLabel")})` : ""} · ${selected.peerId}`,
+        host: `${selected.hostName}${selected.clientId === localClientId ? ` (${t("selfHostLabel")})` : ""} В· ${selected.peerId}`,
         version: selected.minecraftVersion ?? t("serverUnknownVersion"),
         slots: selected.slots,
         password: selected.hasPassword ? t("selectedMetaPassword") : "",
@@ -568,9 +590,14 @@ function syncButtons() {
   openHostModalEl.disabled = busy || mode === "host" || clientLocked;
   openHostModalEl.classList.toggle("hidden", clientLocked);
   hostButtonEl.disabled = busy || mode === "host" || clientLocked;
-  hostButtonEl.textContent = busy ? t("connectBusyButton") : t("modalHostButton");
+  hostButtonEl.textContent = busy
+    ? t("connectBusyButton")
+    : externalHostModeEl?.checked
+      ? t("modalExternalButton")
+      : t("modalHostButton");
   stopButtonEl.disabled = mode === "idle";
   stopButtonEl.textContent = mode === "client" ? t("disconnectButton") : t("stopButton");
+  stopButtonEl.classList.toggle("danger-active", mode !== "idle");
   refreshLobbyEl.disabled = state.realtime?.connection.state === "connecting";
   connectSelectedEl.disabled =
     !selected ||
@@ -598,13 +625,15 @@ function renderSessionCard() {
   const mode = status?.mode ?? "idle";
   const version = status?.minecraftVersion ?? hostSession.minecraftVersion ?? t("serverUnknownVersion");
   const hostBedrockEndpoint = deriveBedrockEndpoint(status?.publicUdpAddr, status?.bedrockPort);
+  const online = Math.max(1, (status?.peerCount ?? 0) + 1);
+  const maxPlayers = Math.max(online, hostSession.maxPlayers ?? 30);
 
   if (mode === "client") {
     hostSectionTitleEl.textContent = t("clientSessionTitle");
     activeHostCardEl.className = "active-host-card";
     activeHostCardEl.innerHTML = `
       <div class="active-host-layout">
-        <div class="host-avatar">⇄</div>
+        <div class="host-avatar">в‡„</div>
         <div class="host-details">
           <h3>${escapeHtml(t("clientCardTitle"))}</h3>
           <p>${escapeHtml(t("clientCardDescription", { peer: status?.peers?.[0]?.addr ?? "n/a" }))}</p>
@@ -639,7 +668,7 @@ function renderSessionCard() {
       <div class="host-avatar">MC</div>
       <div class="host-details">
         <h3>${escapeHtml(hostSession.roomName)}</h3>
-        <p>${escapeHtml(t("hostCardPlayers", { count: status?.peerCount ?? 0 }))}</p>
+        <p>${escapeHtml(t("hostCardPlayers", { count: `${online}/${maxPlayers}` }))}</p>
         <div class="host-meta-row">
           <span class="host-meta-pill">${escapeHtml(t("hostCardVersion", { version }))}</span>
           <span class="host-meta-pill">${escapeHtml(t("hostCardPort", { port: hostSession.localPort }))}</span>
@@ -660,15 +689,36 @@ function renderSessionCard() {
 }
 
 function renderPeers(peers) {
-  peerCountEl.textContent = t("peerCount", { count: peers?.length ?? 0 });
-  if (!peers?.length) {
+  const hostMode = state.status?.mode === "host";
+  const hostVirtualCount = hostMode && hostSession.active ? 1 : 0;
+  peerCountEl.textContent = t("peerCount", { count: (peers?.length ?? 0) + hostVirtualCount });
+
+  if (!peers?.length && !hostMode) {
     peerListEl.innerHTML = `<div class="empty-state">${escapeHtml(t("noPeers"))}</div>`;
     return;
   }
 
-  const hostMode = state.status?.mode === "host";
-  peerListEl.innerHTML = peers
-    .map((peer) => {
+  const rows = [];
+  if (hostMode && hostSession.active) {
+    const nickname = state.profile.nickname?.trim() || "Player";
+    const minecraftNick = state.detectedMinecraftNickname ? ` В· ${state.detectedMinecraftNickname}` : "";
+    rows.push(`
+      <div class="player-row">
+        <div class="player-main">
+          <strong>${escapeHtml(nickname)} <span class="row-chip">${escapeHtml(t("hostBadge"))}</span></strong>
+          <span>${escapeHtml(`${t("profileMinecraftNicknameLabel")}: ${state.detectedMinecraftNickname ?? "n/a"}`)}</span>
+          <span>${escapeHtml(hostSession.peerAddr ? toSocketEndpoint(hostSession.peerAddr) ?? hostSession.peerAddr : "n/a")}</span>
+          <span>${escapeHtml(`online${minecraftNick}`)}</span>
+        </div>
+        <div class="player-actions">
+          <div class="row-action-button">${escapeHtml(t("playerPassiveAction"))}</div>
+        </div>
+      </div>
+    `);
+  }
+
+  rows.push(
+    ...peers.map((peer) => {
       const profile = state.peerProfiles.get(peer.peerId) ?? null;
       const canKick = hostMode && peer.connected;
       const label = state.pendingKicks.has(peer.peerId)
@@ -683,7 +733,7 @@ function renderPeers(peers) {
             <strong>${escapeHtml(profile?.nickname || peer.peerId)}</strong>
             ${profile?.minecraftNickname ? `<span>${escapeHtml(profile.minecraftNickname)}</span>` : ""}
             <span>${escapeHtml(peer.addr)}</span>
-            <span>${peer.connected ? "online" : "pending"} · ${peer.pingMs == null ? "n/a" : `${peer.pingMs} ms`}</span>
+            <span>${peer.connected ? "online" : "pending"} В· ${peer.pingMs == null ? "n/a" : `${peer.pingMs} ms`}</span>
           </div>
           <div class="player-actions">
             ${
@@ -696,8 +746,10 @@ function renderPeers(peers) {
           </div>
         </div>
       `;
-    })
-    .join("");
+    }),
+  );
+
+  peerListEl.innerHTML = rows.join("");
 }
 
 function renderServers() {
@@ -714,7 +766,16 @@ function renderServers() {
       const isLocal = server.clientId === localClientId;
       const isExternal = Boolean(server.external);
       const isConnecting = state.pendingConnects.has(server.clientId);
-      const buttonLabel = isLocal ? t("hostingButton") : isConnecting ? t("connectBusyButton") : t("joinButton");
+      const buttonLabel = isLocal
+        ? t("hostingButton")
+        : isExternal && isConnecting
+          ? t("joinCopiedButton")
+          : isConnecting
+            ? t("connectBusyButton")
+            : t("joinButton");
+      const endpointText = isExternal
+        ? server.joinAddress ?? (server.peerAddr ? toSocketEndpoint(server.peerAddr) ?? server.peerAddr : t("serverNoEndpoint"))
+        : server.peerAddr ?? t("serverNoEndpoint");
 
       return `
         <article class="server-row ${isSelected ? "active" : ""}" data-select-server="${escapeHtml(server.clientId)}">
@@ -726,10 +787,11 @@ function renderServers() {
               ${server.geyserEnabled && server.bedrockPort ? `<span class="row-chip">Bedrock ${escapeHtml(String(server.bedrockPort))}</span>` : ""}
             </div>
             <span>${escapeHtml(server.hostName)}${isLocal ? ` · ${escapeHtml(t("selfHostLabel"))}` : ""}</span>
+            ${isExternal ? `<span class="server-submeta">${escapeHtml(t("externalAddedBy", { name: server.addedBy ?? "Player" }))}</span>` : ""}
           </div>
           <div class="server-main">
             <strong>${escapeHtml(server.minecraftVersion ?? t("serverUnknownVersion"))}</strong>
-            <span>${escapeHtml(server.peerAddr ?? t("serverNoEndpoint"))}</span>
+            <span>${escapeHtml(endpointText)}</span>
           </div>
           <div class="server-main">
             <strong>${escapeHtml(server.slots)}</strong>
@@ -738,7 +800,7 @@ function renderServers() {
             <button
               class="${isLocal ? "secondary-button" : "gradient-button"} row-action-button"
               data-connect-server="${escapeHtml(server.clientId)}"
-              ${isLocal || isConnecting || isClientLocked() || state.status?.mode === "host" ? "disabled" : ""}
+              ${isLocal || (!isExternal && isConnecting) || isClientLocked() || state.status?.mode === "host" ? "disabled" : ""}
             >
               ${escapeHtml(buttonLabel)}
             </button>
@@ -750,7 +812,6 @@ function renderServers() {
 
   renderSelectedServer();
 }
-
 function mergeServers(presenceServers) {
   const externalServers = state.externalServers.map((server) => ({ ...server, external: true }));
   const merged = [...presenceServers];
@@ -760,6 +821,32 @@ function mergeServers(presenceServers) {
     }
   }
   state.servers = merged;
+}
+
+async function refreshExternalServers() {
+  if (!state.externalServers.length) return;
+  const refreshed = await Promise.all(
+    state.externalServers.map(async (server) => {
+      try {
+        const probe = await invoke("query_external_server", {
+          host: server.hostName,
+          port: Number(server.localPort || 25565),
+        });
+        return {
+          ...server,
+          roomName: probe.roomName || server.roomName,
+          hostName: probe.hostName || server.hostName,
+          slots: `${probe.onlinePlayers}/${probe.maxPlayers}`,
+          minecraftVersion: probe.version || server.minecraftVersion || null,
+          pingMs: probe.pingMs ?? server.pingMs ?? null,
+        };
+      } catch {
+        return server;
+      }
+    }),
+  );
+  state.externalServers = refreshed;
+  saveExternalServers();
 }
 
 function hydrateServers(members) {
@@ -806,15 +893,47 @@ function buildExternalServerId(host, port) {
   return `external:${String(host).trim().toLowerCase()}:${Number(port)}`;
 }
 
-async function addExternalServerFromModal(roomName) {
-  const host = externalHostAddressEl.value.trim();
-  const port = Number(externalHostPortEl.value || 25565);
-  if (!host || !port) {
-    throw new Error("Укажите IP/домен и порт внешнего сервера.");
+function parseServerAddress(input) {
+  const value = String(input || "").trim();
+  if (!value) throw new Error("Укажите адрес внешнего сервера.");
+
+  if (value.startsWith("/dns4/") || value.startsWith("/ip4/")) {
+    const parts = value.split("/").filter(Boolean);
+    const host = parts[1];
+    const tcpIndex = parts.findIndex((p) => p === "tcp" || p === "udp");
+    const port = tcpIndex >= 0 ? Number(parts[tcpIndex + 1]) : 25565;
+    if (!host || Number.isNaN(port) || port < 1 || port > 65535) {
+      throw new Error("Некорректный адрес внешнего сервера.");
+    }
+    return { host, port };
   }
+
+  if (value.startsWith("[")) {
+    const match = value.match(/^\[([^\]]+)\](?::(\d+))?$/);
+    if (!match) throw new Error("Некорректный IPv6 адрес.");
+    const port = Number(match[2] || 25565);
+    if (port < 1 || port > 65535) throw new Error("Некорректный порт.");
+    return { host: match[1], port };
+  }
+
+  const separator = value.lastIndexOf(":");
+  if (separator > 0 && value.indexOf(":") === separator) {
+    const maybePort = Number(value.slice(separator + 1));
+    if (!Number.isNaN(maybePort)) {
+      if (maybePort < 1 || maybePort > 65535) throw new Error("Некорректный порт.");
+      return { host: value.slice(0, separator), port: maybePort };
+    }
+  }
+
+  return { host: value, port: 25565 };
+}
+
+async function addExternalServerFromModal(roomName) {
+  const { host, port } = parseServerAddress(externalHostAddressEl.value);
 
   const probe = await invoke("query_external_server", { host, port });
   const clientId = buildExternalServerId(host, port);
+  const joinAddress = `${host}:${port}`;
   const externalServer = {
     clientId,
     roomName: roomName || probe.roomName || host,
@@ -825,6 +944,8 @@ async function addExternalServerFromModal(roomName) {
     peerId: clientId,
     peerAddrs: [normalizeToMultiaddr(`${host}:${port}`)].filter(Boolean),
     peerAddr: normalizeToMultiaddr(`${host}:${port}`),
+    joinAddress,
+    addedBy: state.profile.nickname,
     localPort: port,
     minecraftVersion: probe.version || null,
     transport: "external-java",
@@ -849,11 +970,13 @@ async function addExternalServerFromModal(roomName) {
 function buildPresencePayload(status) {
   const endpoint = advertisedEndpoint(hostSession.listenAddrs, hostSession.peerAddr);
   const socketEndpoint = toSocketEndpoint(endpoint);
+  const online = Math.max(1, (status?.peerCount ?? 0) + 1);
+  const maxPlayers = Math.max(online, hostSession.maxPlayers ?? 30);
   return {
     room_name: hostSession.roomName,
     host_name: state.profile.nickname,
-    minecraft_nickname: state.profile.minecraftNickname || null,
-    slots: `${Math.max(1, (status?.peerCount ?? 0) + 1)}/30`,
+    minecraft_nickname: state.detectedMinecraftNickname ?? null,
+    slots: `${online}/${maxPlayers}`,
     has_password: hostSession.hasPassword,
     peer_id: hostSession.peerId ?? localClientId,
     listen_addrs: hostSession.listenAddrs,
@@ -1013,6 +1136,7 @@ async function refreshLobby() {
       await state.lobbyChannel.attach();
     }
     const members = await state.lobbyChannel.presence.get();
+    await refreshExternalServers();
     hydrateServers(members);
     addLog(`Lobby refresh: ${members.length} presence members.`);
   } catch (error) {
@@ -1091,8 +1215,8 @@ async function runPreflightCheck({ silent = false } = {}) {
 
   if (!silent) {
     addLog(
-      `Preflight ${report.reachable ? "OK" : "FAIL"} для 127.0.0.1:${report.localPort}. ${
-        report.minecraftVersion ? `Версия: ${report.minecraftVersion}.` : "Версия не определилась."
+      `Preflight ${report.reachable ? "OK" : "FAIL"} for 127.0.0.1:${report.localPort}. ${
+        report.minecraftVersion ? `Version: ${report.minecraftVersion}.` : "Version not detected."
       }`,
     );
     addLog(report.recommendedHostAction);
@@ -1105,15 +1229,15 @@ async function runPreflightCheck({ silent = false } = {}) {
 async function startEmbeddedTestServer() {
   const port = Number(testServerPortEl.value || 25566);
   if (port === Number(localGamePortEl.value || 25565)) {
-    addLog("Диагностический сервер нельзя запускать на том же порту, что и Minecraft. Используйте отдельный порт, например 25566.");
+    addLog("Diagnostics server cannot use the same port as Minecraft. Use a separate port, e.g. 25566.");
     return;
   }
   try {
     const info = await invoke("start_test_server", { port });
     state.testServerInfo = info;
-    addLog(`Тестовый сервер запущен на ${info.bindAddr}. Протокол: ${info.protocol}.`);
+    addLog(`Test server started at ${info.bindAddr}. Protocol: ${info.protocol}.`);
   } catch (error) {
-    addLog(`Не удалось запустить тестовый сервер: ${String(error)}`);
+    addLog(`Failed to start test server: ${String(error)}`);
   }
 }
 
@@ -1121,9 +1245,9 @@ async function stopEmbeddedTestServer() {
   try {
     await invoke("stop_test_server");
     state.testServerInfo = null;
-    addLog("Тестовый сервер остановлен.");
+    addLog("Test server stopped.");
   } catch (error) {
-    addLog(`Не удалось остановить тестовый сервер: ${String(error)}`);
+    addLog(`Failed to stop test server: ${String(error)}`);
   }
 }
 
@@ -1132,9 +1256,9 @@ async function copyDiagnosticsSnapshot() {
     const localPort = Number(localGamePortEl.value || 25565);
     const snapshot = await invoke("export_diagnostics_snapshot", { localPort });
     await navigator.clipboard.writeText(JSON.stringify(snapshot, null, 2));
-    addLog("Полная диагностика скопирована в буфер обмена.");
+    addLog("Full diagnostics copied to clipboard.");
   } catch (error) {
-    addLog(`Не удалось выгрузить диагностику: ${String(error)}`);
+    addLog(`Failed to export diagnostics: ${String(error)}`);
   }
 }
 
@@ -1146,14 +1270,15 @@ async function probeEmbeddedTestServer() {
       port,
       payload,
     });
-    addLog(`Тестовый сервер ответил с 127.0.0.1:${port}: ${response || "<empty>"}`);
+    addLog(`Test server response from 127.0.0.1:${port}: ${response || "<empty>"}`);
   } catch (error) {
-    addLog(`Не удалось подключиться к тестовому серверу на 127.0.0.1:${port}: ${String(error)}`);
+    addLog(`Failed to connect test server 127.0.0.1:${port}: ${String(error)}`);
   }
 }
 
 async function startHosting() {
   if (!canOpenHostModal()) return;
+  await detectMinecraftNickname();
   const roomName = roomNameEl.value.trim();
   if (!roomName) {
     roomNameEl.focus();
@@ -1184,7 +1309,7 @@ async function startHosting() {
   try {
     const preflight = await runPreflightCheck({ silent: false });
     if (!preflight.reachable) {
-      addLog("Хост не запущен: локальный Minecraft недоступен. Сначала откройте мир в LAN или запустите тестовый сервер.");
+      addLog("Host not started: local Minecraft is unavailable. Open LAN world or start a local server first.");
       return;
     }
 
@@ -1208,12 +1333,19 @@ async function startHosting() {
     hostSession.peerAddr = advertisedEndpoint(hostSession.listenAddrs, status.publicUdpAddr ?? status.udpBindAddr);
     hostSession.localPort = localPort;
     hostSession.minecraftVersion = status.minecraftVersion ?? null;
+    try {
+      const localMeta = await invoke("query_external_server", { host: "127.0.0.1", port: localPort });
+      const maxPlayers = Number(localMeta?.maxPlayers ?? 0);
+      hostSession.maxPlayers = maxPlayers > 0 ? maxPlayers : 30;
+    } catch {
+      hostSession.maxPlayers = 30;
+    }
     hostSession.presencePayload = null;
     hostSession.presenceEntered = false;
     if (canAdvertiseHost()) {
       await syncPresence(status, { force: true, enter: true });
     } else {
-      addLog("Presence отложен: ждём публичный endpoint от relay или reverse tunnel.");
+      addLog("Presence delayed: waiting for public endpoint.");
     }
     await refreshLobby();
     closeModal();
@@ -1245,6 +1377,7 @@ async function stopSession() {
     hostSession.listenAddrs = [];
     hostSession.peerAddr = null;
     hostSession.localPort = 25565;
+    hostSession.maxPlayers = 30;
     hostSession.minecraftVersion = null;
     hostSession.presencePayload = null;
     hostSession.presenceEntered = false;
@@ -1257,11 +1390,19 @@ async function stopSession() {
 }
 
 async function connectToServer(server) {
+  await detectMinecraftNickname();
   if (server.external) {
-    if (server.peerAddr) {
-      await navigator.clipboard.writeText(toSocketEndpoint(server.peerAddr) ?? server.peerAddr);
+    const externalJoin = server.joinAddress ?? (server.peerAddr ? toSocketEndpoint(server.peerAddr) ?? server.peerAddr : null);
+    if (externalJoin) {
+      await navigator.clipboard.writeText(externalJoin);
+      state.pendingConnects.add(server.clientId);
+      renderServers();
       addLog(t("copiedIp"));
-      setMinecraftHint(`${t("selectedAddressLabel")}: ${toSocketEndpoint(server.peerAddr) ?? server.peerAddr}`, true);
+      setMinecraftHint(`${t("selectedAddressLabel")}: ${externalJoin}`, true);
+      setTimeout(() => {
+        state.pendingConnects.delete(server.clientId);
+        renderServers();
+      }, 1400);
     }
     return;
   }
@@ -1316,7 +1457,7 @@ async function connectToServer(server) {
     await state.realtime.channels.get(`lobby:${server.clientId}`).publish("connect-request", {
       client_id: localClientId,
       nickname: state.profile.nickname,
-      minecraft_nickname: state.profile.minecraftNickname || null,
+      minecraft_nickname: state.detectedMinecraftNickname ?? null,
       room_name: server.roomName,
       peer_addr: status.publicUdpAddr ?? status.udpBindAddr,
       relay_session_id: relaySessionId,
@@ -1430,11 +1571,11 @@ await listen("reverse_tunnel_ready", async (event) => {
 
 await listen("test_server_started", async (event) => {
   state.testServerInfo = event.payload ?? null;
-  addLog(`Тестовый сервер готов: ${event.payload?.bindAddr ?? "n/a"} (${event.payload?.protocol ?? "unknown"}).`);
+  addLog(`Test server ready: ${event.payload?.bindAddr ?? "n/a"} (${event.payload?.protocol ?? "unknown"}).`);
 });
 
 await listen("test_server_client_closed", async (event) => {
-  addLog(`Тестовый сервер: клиент ${event.payload ?? "unknown"} завершил соединение.`);
+  addLog(`Test server client disconnected: ${event.payload ?? "unknown"}.`);
 });
 
 await listen("relay_active", async (event) => {
@@ -1476,7 +1617,7 @@ copyDiagnosticsEl.addEventListener("click", async () => {
 copySelectedEndpointEl.addEventListener("click", async () => {
   const selected = getSelectedServer();
   if (!selected?.peerAddr) return;
-  await navigator.clipboard.writeText(selected.peerAddr);
+  await navigator.clipboard.writeText(selected.joinAddress ?? (toSocketEndpoint(selected.peerAddr) ?? selected.peerAddr));
   addLog(t("copiedIp"));
 });
 copySelectedBedrockEndpointEl.addEventListener("click", async () => {
@@ -1587,6 +1728,7 @@ renderSessionCard();
 syncButtons();
 setPage("home");
 await loadAppInfo();
+await detectMinecraftNickname();
 
 setInterval(() => {
   void pollStatus();
@@ -1594,3 +1736,5 @@ setInterval(() => {
 
 await setupAbly();
 await pollStatus();
+
+

@@ -133,6 +133,13 @@ pub struct LanPortDetection {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct MinecraftNicknameDetection {
+    pub nickname: String,
+    pub source_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct TestServerInfo {
     pub bind_addr: String,
     pub protocol: String,
