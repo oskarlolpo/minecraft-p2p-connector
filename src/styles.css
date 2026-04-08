@@ -910,18 +910,18 @@ body[data-theme="white"] .nav-button img {
 }
 
 .profile-menu {
-  position: absolute;
-  top: calc(100% + 12px);
+  position: fixed;
+  top: 0;
   left: 0;
-  width: min(360px, calc(100vw - 80px));
-  max-height: min(70vh, 520px);
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(78vh, 560px);
   overflow-y: auto;
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: 22px;
   background: var(--surface-strong);
   box-shadow: var(--shadow);
-  z-index: 20;
+  z-index: 2000;
 }
 
 .profile-menu::-webkit-scrollbar {

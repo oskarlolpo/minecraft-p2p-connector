@@ -68,7 +68,6 @@ const brandAvatarFallbackEl = document.querySelector("#brand-avatar-fallback");
 const profileMenuTriggerEl = document.querySelector("#profile-menu-trigger");
 const profileMenuEl = document.querySelector("#profile-menu");
 const profileNicknameEl = document.querySelector("#profile-nickname");
-const profileMinecraftNicknameEl = document.querySelector("#profile-minecraft-nickname");
 const profileAvatarFileEl = document.querySelector("#profile-avatar-file");
 const chooseAvatarEl = document.querySelector("#choose-avatar");
 const saveProfileEl = document.querySelector("#save-profile");
@@ -82,6 +81,16 @@ const externalHostAddressEl = document.querySelector("#external-host-address");
 
 const PROFILE_STORAGE_KEY = "minecraft-p2p-profile-v1";
 const EXTERNAL_SERVERS_STORAGE_KEY = "minecraft-p2p-external-servers-v1";
+const CP1251_EXTRA_ENCODE_MAP = {
+  "Ђ": 0x80, "Ѓ": 0x81, "‚": 0x82, "ѓ": 0x83, "„": 0x84, "…": 0x85, "†": 0x86, "‡": 0x87,
+  "€": 0x88, "‰": 0x89, "Љ": 0x8a, "‹": 0x8b, "Њ": 0x8c, "Ќ": 0x8d, "Ћ": 0x8e, "Џ": 0x8f,
+  "ђ": 0x90, "‘": 0x91, "’": 0x92, "“": 0x93, "”": 0x94, "•": 0x95, "–": 0x96, "—": 0x97,
+  "™": 0x99, "љ": 0x9a, "›": 0x9b, "њ": 0x9c, "ќ": 0x9d, "ћ": 0x9e, "џ": 0x9f,
+  "Ў": 0xa1, "ў": 0xa2, "Ј": 0xa3, "¤": 0xa4, "Ґ": 0xa5, "¦": 0xa6, "§": 0xa7,
+  "Ё": 0xa8, "©": 0xa9, "Є": 0xaa, "«": 0xab, "¬": 0xac, "­": 0xad, "®": 0xae, "Ї": 0xaf,
+  "°": 0xb0, "±": 0xb1, "І": 0xb2, "і": 0xb3, "ґ": 0xb4, "µ": 0xb5, "¶": 0xb6, "·": 0xb7,
+  "ё": 0xb8, "№": 0xb9, "є": 0xba, "»": 0xbb, "ј": 0xbc, "Ѕ": 0xbd, "ѕ": 0xbe, "ї": 0xbf,
+};
 
 const hostSession = {
   active: false,
@@ -178,6 +187,37 @@ function t(key, variables = {}) {
   return template.replaceAll(/\{(\w+)\}/g, (_, name) => String(variables[name] ?? `{${name}}`));
 }
 
+function toCp1251Byte(char) {
+  const code = char.charCodeAt(0);
+  if (code <= 0x7f) return code;
+  if (code >= 0x0410 && code <= 0x044f) return code - 0x350;
+  if (code === 0x0401) return 0xa8;
+  if (code === 0x0451) return 0xb8;
+  return CP1251_EXTRA_ENCODE_MAP[char];
+}
+
+function decodeMojibakeIfNeeded(value) {
+  const text = String(value ?? "");
+  if (!text) return text;
+  if (!/(?:[РС][\u0400-\u045f]){3,}/.test(text)) return text;
+
+  const bytes = [];
+  for (const char of text) {
+    const byte = toCp1251Byte(char);
+    if (byte == null) {
+      return text;
+    }
+    bytes.push(byte);
+  }
+
+  try {
+    const decoded = new TextDecoder("utf-8", { fatal: false }).decode(Uint8Array.from(bytes));
+    return /[А-Яа-яЁё]/.test(decoded) ? decoded : text;
+  } catch {
+    return text;
+  }
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -226,7 +266,6 @@ function renderProfile() {
   const nickname = state.profile.nickname?.trim() || "Player";
   brandUserNameEl.textContent = nickname;
   profileNicknameEl.value = nickname;
-  profileMinecraftNicknameEl.value = state.detectedMinecraftNickname ?? "";
 
   if (state.profile.avatarDataUrl) {
     brandAvatarImageEl.src = state.profile.avatarDataUrl;
@@ -339,17 +378,30 @@ async function installUpdate() {
 function toggleProfileMenu(force) {
   const open = typeof force === "boolean" ? force : profileMenuEl.classList.contains("hidden");
   profileMenuEl.classList.toggle("hidden", !open);
-  if (open) {
-    requestAnimationFrame(() => {
-      profileMenuEl.style.left = "0px";
-      profileMenuEl.style.right = "auto";
-      const rect = profileMenuEl.getBoundingClientRect();
-      const overflowRight = rect.right - window.innerWidth;
-      if (overflowRight > 0) {
-        profileMenuEl.style.left = `${Math.max(0, -overflowRight - 12)}px`;
-      }
-    });
+  if (open) requestAnimationFrame(positionProfileMenu);
+}
+
+function positionProfileMenu() {
+  if (profileMenuEl.classList.contains("hidden")) return;
+  const triggerRect = profileMenuTriggerEl.getBoundingClientRect();
+  const menuRect = profileMenuEl.getBoundingClientRect();
+  const margin = 12;
+  const spacing = 8;
+
+  let left = triggerRect.left;
+  let top = triggerRect.bottom + spacing;
+
+  const maxLeft = window.innerWidth - menuRect.width - margin;
+  left = Math.min(Math.max(margin, left), Math.max(margin, maxLeft));
+
+  const maxTop = window.innerHeight - menuRect.height - margin;
+  if (top > maxTop) {
+    top = triggerRect.top - menuRect.height - spacing;
   }
+  top = Math.min(Math.max(margin, top), Math.max(margin, maxTop));
+
+  profileMenuEl.style.left = `${Math.round(left)}px`;
+  profileMenuEl.style.top = `${Math.round(top)}px`;
 }
 
 async function pickAvatarFile() {
@@ -376,19 +428,20 @@ function saveProfileFromInputs() {
 }
 
 function addLog(message) {
+  const normalizedMessage = decodeMojibakeIfNeeded(String(message ?? ""));
   const stamp = new Date().toLocaleTimeString(state.preferences.language === "ru" ? "ru-RU" : "en-US", {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
   });
-  state.logBuffer.unshift(`[${stamp}] ${message}`);
+  state.logBuffer.unshift(`[${stamp}] ${normalizedMessage}`);
   state.logBuffer = state.logBuffer.slice(0, 120);
   renderLogs();
 }
 
 function currentLogLines() {
   const combined = [...state.logBuffer];
-  if (state.status?.logs?.length) combined.push(...state.status.logs);
+  if (state.status?.logs?.length) combined.push(...state.status.logs.map((line) => decodeMojibakeIfNeeded(line)));
   return [...new Set(combined)].slice(0, 120);
 }
 
@@ -568,7 +621,7 @@ function renderSelectedServer() {
   selectedBedrockEndpointEl.textContent = bedrockEndpoint ?? "n/a";
   selectedMetaEl.textContent = selected
     ? t("selectedMetaTemplate", {
-        host: `${selected.hostName}${selected.clientId === localClientId ? ` (${t("selfHostLabel")})` : ""} В· ${selected.peerId}`,
+        host: `${selected.hostName}${selected.clientId === localClientId ? ` (${t("selfHostLabel")})` : ""} · ${selected.peerId}`,
         version: selected.minecraftVersion ?? t("serverUnknownVersion"),
         slots: selected.slots,
         password: selected.hasPassword ? t("selectedMetaPassword") : "",
@@ -632,10 +685,10 @@ function renderSessionCard() {
     hostSectionTitleEl.textContent = t("clientSessionTitle");
     activeHostCardEl.className = "active-host-card";
     activeHostCardEl.innerHTML = `
-      <div class="active-host-layout">
-        <div class="host-avatar">в‡„</div>
-        <div class="host-details">
-          <h3>${escapeHtml(t("clientCardTitle"))}</h3>
+    <div class="active-host-layout">
+      <div class="host-avatar">⇄</div>
+      <div class="host-details">
+        <h3>${escapeHtml(t("clientCardTitle"))}</h3>
           <p>${escapeHtml(t("clientCardDescription", { peer: status?.peers?.[0]?.addr ?? "n/a" }))}</p>
           <div class="host-meta-row">
             <span class="host-meta-pill">${escapeHtml(t("clientCardReady"))}</span>
@@ -701,7 +754,7 @@ function renderPeers(peers) {
   const rows = [];
   if (hostMode && hostSession.active) {
     const nickname = state.profile.nickname?.trim() || "Player";
-    const minecraftNick = state.detectedMinecraftNickname ? ` В· ${state.detectedMinecraftNickname}` : "";
+    const minecraftNick = state.detectedMinecraftNickname ? ` · ${state.detectedMinecraftNickname}` : "";
     rows.push(`
       <div class="player-row">
         <div class="player-main">
@@ -730,12 +783,12 @@ function renderPeers(peers) {
       return `
         <div class="player-row">
           <div class="player-main">
-            <strong>${escapeHtml(profile?.nickname || peer.peerId)}</strong>
-            ${profile?.minecraftNickname ? `<span>${escapeHtml(profile.minecraftNickname)}</span>` : ""}
-            <span>${escapeHtml(peer.addr)}</span>
-            <span>${peer.connected ? "online" : "pending"} В· ${peer.pingMs == null ? "n/a" : `${peer.pingMs} ms`}</span>
-          </div>
-          <div class="player-actions">
+          <strong>${escapeHtml(profile?.nickname || peer.peerId)}</strong>
+          ${profile?.minecraftNickname ? `<span>${escapeHtml(profile.minecraftNickname)}</span>` : ""}
+          <span>${escapeHtml(peer.addr)}</span>
+          <span>${peer.connected ? "online" : "pending"} · ${peer.pingMs == null ? "n/a" : `${peer.pingMs} ms`}</span>
+        </div>
+        <div class="player-actions">
             ${
               canKick
                 ? `<button class="secondary-button row-action-button" data-kick-peer="${escapeHtml(peer.peerId)}" ${
@@ -1038,7 +1091,7 @@ function renderStatus(status) {
   publicEndpointEl.textContent = status.publicUdpAddr ?? status.udpBindAddr ?? "n/a";
   sessionModeEl.textContent = formatMode(status.mode);
   currentVersionEl.textContent = status.minecraftVersion ?? t("serverUnknownVersion");
-  statusNoteEl.textContent = status.note ?? t("modeIdle");
+  statusNoteEl.textContent = decodeMojibakeIfNeeded(status.note ?? t("modeIdle"));
   renderPeers(status.peers ?? []);
   renderSessionCard();
   renderLogs();
@@ -1710,10 +1763,12 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof Node)) return;
-  if (!profileMenuEl.contains(target) && !profileMenuTriggerEl.contains(target)) {
+  if (!profileMenuEl?.contains(target) && !profileMenuTriggerEl?.contains(target)) {
     toggleProfileMenu(false);
   }
 });
+window.addEventListener("resize", positionProfileMenu);
+window.addEventListener("scroll", positionProfileMenu, true);
 
 document.body.dataset.theme = state.preferences.theme;
 applyTranslations();

@@ -23,6 +23,11 @@ use std::{path::PathBuf, process::Command, time::{SystemTime, UNIX_EPOCH}};
 use tauri::{AppHandle, State};
 use tokio::sync::Mutex;
 
+const RELEASES_API_URL: &str =
+    "https://api.github.com/repos/oskarlolpo/minecraft-p2p-connector/releases/latest";
+const RELEASES_LATEST_URL: &str =
+    "https://github.com/oskarlolpo/minecraft-p2p-connector/releases/latest";
+
 #[derive(Clone)]
 struct AppState {
     manager: NetworkManager,
@@ -281,38 +286,68 @@ async fn check_for_updates_impl() -> anyhow::Result<UpdateCheckResult> {
     let client = reqwest::Client::builder()
         .user_agent("minecraft-p2p-connector")
         .build()?;
-    let response = client
-        .get("https://api.github.com/repos/oskarlolpo/minecraft-p2p-connector/releases/latest")
-        .send()
-        .await?
-        .error_for_status()?;
 
-    let value: serde_json::Value = response.json().await?;
-    let tag_name = value
-        .get("tag_name")
-        .and_then(|item| item.as_str())
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    if let Ok(response) = client
+        .get(RELEASES_API_URL)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+    {
+        if response.status().is_success() {
+            let value: serde_json::Value = response.json().await?;
+            let tag_name = value
+                .get("tag_name")
+                .and_then(|item| item.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let latest_version = tag_name.trim_start_matches('v').to_string();
+            let current_version = env!("CARGO_PKG_VERSION").to_string();
+            let release_url = value
+                .get("html_url")
+                .and_then(|item| item.as_str())
+                .map(str::to_string);
+            let download_url = value
+                .get("assets")
+                .and_then(|item| item.as_array())
+                .and_then(|assets| {
+                    assets.iter().find_map(|asset| {
+                        let name = asset.get("name")?.as_str()?;
+                        if name.ends_with("_x64-setup.exe") {
+                            asset
+                                .get("browser_download_url")
+                                .and_then(|item| item.as_str())
+                                .map(str::to_string)
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .or_else(|| {
+                    (!tag_name.is_empty())
+                        .then(|| build_setup_asset_url(&tag_name, &latest_version))
+                });
+
+            return Ok(UpdateCheckResult {
+                current_version: current_version.clone(),
+                latest_version: (!latest_version.is_empty()).then_some(latest_version.clone()),
+                available: !latest_version.is_empty() && latest_version != current_version,
+                release_url,
+                download_url,
+            });
+        }
+    }
+
+    let latest_response = client.get(RELEASES_LATEST_URL).send().await?.error_for_status()?;
+    let resolved_url = latest_response.url().to_string();
+    let tag_name = extract_tag_from_release_url(&resolved_url)
+        .ok_or_else(|| anyhow::anyhow!("failed to resolve latest GitHub release tag"))?;
     let latest_version = tag_name.trim_start_matches('v').to_string();
     let current_version = env!("CARGO_PKG_VERSION").to_string();
-    let release_url = value.get("html_url").and_then(|item| item.as_str()).map(str::to_string);
-    let download_url = value
-        .get("assets")
-        .and_then(|item| item.as_array())
-        .and_then(|assets| {
-            assets.iter().find_map(|asset| {
-                let name = asset.get("name")?.as_str()?;
-                if name.ends_with("_x64-setup.exe") {
-                    asset
-                        .get("browser_download_url")
-                        .and_then(|item| item.as_str())
-                        .map(str::to_string)
-                } else {
-                    None
-                }
-            })
-        });
+    let release_url = Some(format!(
+        "https://github.com/oskarlolpo/minecraft-p2p-connector/releases/tag/{tag_name}"
+    ));
+    let download_url = Some(build_setup_asset_url(&tag_name, &latest_version));
 
     Ok(UpdateCheckResult {
         current_version: current_version.clone(),
@@ -423,6 +458,23 @@ fn multiaddr_or_socket_to_socket(value: &str) -> Option<String> {
     }
 
     None
+}
+
+fn extract_tag_from_release_url(url: &str) -> Option<String> {
+    let (_, tail) = url.split_once("/tag/")?;
+    let tag = tail
+        .split(['?', '#', '/'])
+        .next()
+        .map(str::trim)
+        .unwrap_or_default();
+    (!tag.is_empty()).then(|| tag.to_string())
+}
+
+fn build_setup_asset_url(tag_name: &str, latest_version: &str) -> String {
+    format!(
+        "https://github.com/oskarlolpo/minecraft-p2p-connector/releases/download/{tag_name}/Minecraft.P2P.Connector_{}_x64-setup.exe",
+        latest_version
+    )
 }
 
 fn derive_bedrock_public_endpoint(public_addr: &str, bedrock_port: u16) -> Option<String> {

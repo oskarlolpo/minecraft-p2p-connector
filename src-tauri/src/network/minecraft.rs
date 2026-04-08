@@ -1,7 +1,9 @@
 use anyhow::{anyhow, Context, Result};
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 use serde::Deserialize;
 use tokio::{
@@ -164,15 +166,19 @@ async fn probe_local_tcp(port: u16) -> Result<()> {
 fn detect_lan_port_from_logs_blocking() -> Result<LanPortDetection> {
     let candidates = collect_log_candidates()?;
     for path in candidates {
-        if let Ok(contents) = fs::read_to_string(&path) {
+        if let Some(contents) = read_text_lossy(&path) {
             if let Some(detection) = parse_lan_port_from_contents(&path, &contents) {
                 return Ok(detection);
             }
         }
     }
 
+    if let Some(detection) = detect_lan_port_from_system_listeners() {
+        return Ok(detection);
+    }
+
     Err(anyhow!(
-        "could not find a recent 'Started serving on <port>' entry in Minecraft logs"
+        "could not find a recent 'Started serving on <port>' entry in Minecraft logs or active Java listeners"
     ))
 }
 
@@ -186,6 +192,33 @@ fn collect_log_candidates() -> Result<Vec<PathBuf>> {
         roots.push(app_data.join("PrismLauncher").join("instances"));
         roots.push(app_data.join("MultiMC").join("instances"));
         roots.push(app_data.join(".feather").join("logs"));
+        roots.push(app_data.join(".tlauncher").join("legacy").join("Minecraft").join("logs"));
+        roots.push(
+            app_data
+                .join(".tlauncher")
+                .join("legacy")
+                .join("Minecraft")
+                .join("game")
+                .join("logs"),
+        );
+    }
+
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        let local_app_data = PathBuf::from(local_app_data);
+        roots.push(local_app_data.join(".minecraft").join("logs"));
+        roots.push(local_app_data.join("PrismLauncher").join("instances"));
+        roots.push(local_app_data.join("MultiMC").join("instances"));
+        roots.push(local_app_data.join("curseforge").join("minecraft").join("Instances"));
+        roots.push(local_app_data.join("curseforge").join("minecraft").join("Install"));
+        roots.push(
+            local_app_data
+                .join("Packages")
+                .join("Microsoft.4297127D64EC6_8wekyb3d8bbwe")
+                .join("LocalCache")
+                .join("Roaming")
+                .join(".minecraft")
+                .join("logs"),
+        );
     }
 
     if let Some(user_profile) = std::env::var_os("USERPROFILE") {
@@ -219,11 +252,8 @@ fn push_candidate_logs(root: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     }
 
     if root.is_file() {
-        if root
-            .extension()
-            .and_then(|value| value.to_str())
-            .map(|value| value.eq_ignore_ascii_case("log"))
-            .unwrap_or(false)
+        let extension = root.extension().and_then(|value| value.to_str()).unwrap_or_default();
+        if extension.eq_ignore_ascii_case("log") || extension.eq_ignore_ascii_case("txt")
         {
             out.push(root.to_path_buf());
         }
@@ -239,7 +269,9 @@ fn push_candidate_logs(root: &Path, depth: usize, out: &mut Vec<PathBuf>) {
                         && path
                             .extension()
                             .and_then(|value| value.to_str())
-                            .map(|value| value.eq_ignore_ascii_case("log"))
+                            .map(|value| {
+                                value.eq_ignore_ascii_case("log") || value.eq_ignore_ascii_case("txt")
+                            })
                             .unwrap_or(false)
                     {
                         out.push(path);
@@ -277,6 +309,7 @@ fn parse_lan_port_from_contents(path: &Path, contents: &str) -> Option<LanPortDe
 }
 
 fn extract_port_from_line(line: &str) -> Option<u16> {
+    let normalized_line = line.trim();
     for marker in [
         "Started serving on ",
         "Started serving on port ",
@@ -285,8 +318,8 @@ fn extract_port_from_line(line: &str) -> Option<u16> {
         "Порт локального сервера: ",
         "Local server port: ",
     ] {
-        if let Some(index) = line.find(marker) {
-            let port_part = &line[index + marker.len()..];
+        if let Some(index) = normalized_line.find(marker) {
+            let port_part = &normalized_line[index + marker.len()..];
             let digits = port_part
                 .chars()
                 .take_while(|value| value.is_ascii_digit())
@@ -296,7 +329,158 @@ fn extract_port_from_line(line: &str) -> Option<u16> {
             }
         }
     }
+
+    let lower = normalized_line.to_ascii_lowercase();
+    if lower.contains("started serving on")
+        || lower.contains("local server port")
+        || lower.contains("порт локального сервера")
+    {
+        return extract_last_port_from_line(normalized_line);
+    }
+
     None
+}
+
+fn extract_last_port_from_line(line: &str) -> Option<u16> {
+    let mut current = String::new();
+    let mut last_valid = None;
+
+    for ch in line.chars() {
+        if ch.is_ascii_digit() {
+            current.push(ch);
+            continue;
+        }
+        if let Some(port) = parse_port_candidate(&current) {
+            last_valid = Some(port);
+        }
+        current.clear();
+    }
+
+    if let Some(port) = parse_port_candidate(&current) {
+        last_valid = Some(port);
+    }
+
+    last_valid
+}
+
+fn parse_port_candidate(value: &str) -> Option<u16> {
+    if value.len() < 2 || value.len() > 5 {
+        return None;
+    }
+    let port = value.parse::<u16>().ok()?;
+    (port > 0).then_some(port)
+}
+
+fn detect_lan_port_from_system_listeners() -> Option<LanPortDetection> {
+    let output = Command::new("netstat")
+        .args(["-ano", "-p", "tcp"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let content = String::from_utf8_lossy(&output.stdout);
+    let mut java_candidates = Vec::new();
+    let mut generic_candidates = Vec::new();
+    let mut java_pid_cache: HashMap<u32, bool> = HashMap::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("TCP") {
+            continue;
+        }
+        let columns = trimmed.split_whitespace().collect::<Vec<_>>();
+        if columns.len() < 5 {
+            continue;
+        }
+        if !columns[3].eq_ignore_ascii_case("LISTENING") {
+            continue;
+        }
+
+        let local = columns[1];
+        let Ok(pid) = columns[4].parse::<u32>() else {
+            continue;
+        };
+        let Some((host, port)) = split_host_port_label(local) else {
+            continue;
+        };
+        if port == 0 || port < 1024 || !is_local_bind_host(&host) {
+            continue;
+        }
+
+        let candidate = (port, pid, local.to_string());
+        if *java_pid_cache
+            .entry(pid)
+            .or_insert_with(|| pid_looks_like_java(pid))
+        {
+            java_candidates.push(candidate);
+        } else {
+            generic_candidates.push(candidate);
+        }
+    }
+
+    java_candidates.sort_by(|left, right| right.0.cmp(&left.0));
+    generic_candidates.sort_by(|left, right| right.0.cmp(&left.0));
+
+    let picked = java_candidates
+        .first()
+        .or_else(|| generic_candidates.first())?;
+
+    Some(LanPortDetection {
+        port: picked.0,
+        source_path: "system:netstat".into(),
+        source_line: format!("netstat LISTENING {} pid {}", picked.2, picked.1),
+    })
+}
+
+fn split_host_port_label(value: &str) -> Option<(String, u16)> {
+    if value.is_empty() {
+        return None;
+    }
+
+    if value.starts_with('[') {
+        let close = value.find(']')?;
+        let host = value.get(1..close)?.to_string();
+        let port = value.get(close + 2..)?.parse::<u16>().ok()?;
+        return Some((host, port));
+    }
+
+    let (host, port) = value.rsplit_once(':')?;
+    Some((host.to_string(), port.parse::<u16>().ok()?))
+}
+
+fn is_local_bind_host(host: &str) -> bool {
+    let normalized = host.trim().trim_matches(|c| c == '[' || c == ']').to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "127.0.0.1" | "0.0.0.0" | "::1" | "::" | "*" | "localhost"
+    )
+}
+
+fn pid_looks_like_java(pid: u32) -> bool {
+    let output = Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+        .output();
+
+    let Ok(output) = output else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("INFO:"));
+    let Some(line) = line else {
+        return false;
+    };
+    let first = line.split(',').next().unwrap_or_default();
+    let process_name = first.trim().trim_matches('"').to_ascii_lowercase();
+    process_name.contains("java")
 }
 
 fn detect_minecraft_nickname_blocking() -> Result<MinecraftNicknameDetection> {
@@ -305,7 +489,7 @@ fn detect_minecraft_nickname_blocking() -> Result<MinecraftNicknameDetection> {
         if !path.exists() {
             continue;
         }
-        if let Ok(contents) = fs::read_to_string(&path) {
+        if let Some(contents) = read_text_lossy(&path) {
             if let Some(nickname) = parse_nickname_from_file(&path, &contents) {
                 return Ok(MinecraftNicknameDetection {
                     nickname,
@@ -324,6 +508,39 @@ fn collect_nickname_sources() -> Vec<PathBuf> {
         files.push(app_data.join(".minecraft").join("launcher_accounts.json"));
         files.push(app_data.join(".minecraft").join("launcher_profiles.json"));
         files.push(app_data.join(".minecraft").join("logs").join("latest.log"));
+        files.push(
+            app_data
+                .join(".tlauncher")
+                .join("legacy")
+                .join("Minecraft")
+                .join("logs")
+                .join("latest.log"),
+        );
+        files.push(
+            app_data
+                .join(".tlauncher")
+                .join("legacy")
+                .join("Minecraft")
+                .join("game")
+                .join("logs")
+                .join("latest.log"),
+        );
+    }
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        let local_app_data = PathBuf::from(local_app_data);
+        files.push(local_app_data.join(".minecraft").join("launcher_accounts.json"));
+        files.push(local_app_data.join(".minecraft").join("launcher_profiles.json"));
+        files.push(local_app_data.join(".minecraft").join("logs").join("latest.log"));
+        files.push(
+            local_app_data
+                .join("Packages")
+                .join("Microsoft.4297127D64EC6_8wekyb3d8bbwe")
+                .join("LocalCache")
+                .join("Roaming")
+                .join(".minecraft")
+                .join("logs")
+                .join("latest.log"),
+        );
     }
     if let Some(user_profile) = std::env::var_os("USERPROFILE") {
         let user_profile = PathBuf::from(user_profile);
@@ -336,6 +553,9 @@ fn collect_nickname_sources() -> Vec<PathBuf> {
                 .join("latest.log"),
         );
     }
+    if let Ok(candidates) = collect_log_candidates() {
+        files.extend(candidates.into_iter().take(64));
+    }
     files
 }
 
@@ -347,19 +567,46 @@ fn parse_nickname_from_file(path: &Path, contents: &str) -> Option<String> {
     if name == "launcher_profiles.json" {
         return parse_launcher_profiles_nick(contents);
     }
-    parse_logs_nick(contents)
+    if name.ends_with(".log") || name.ends_with(".txt") {
+        return parse_logs_nick(contents);
+    }
+    None
 }
 
 fn parse_launcher_accounts_nick(contents: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(contents).ok()?;
-    let active_id = value.get("activeAccountLocalId")?.as_str()?;
-    value.get("accounts")?
-        .get(active_id)?
-        .get("minecraftProfile")?
-        .get("name")?
-        .as_str()
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty())
+    let accounts = value.get("accounts")?.as_object()?;
+
+    let active_id = value.get("activeAccountLocalId").and_then(|item| {
+        item.as_str()
+            .map(str::to_string)
+            .or_else(|| item.as_u64().map(|id| id.to_string()))
+    });
+
+    if let Some(active_id) = active_id {
+        if let Some(name) = accounts
+            .get(&active_id)
+            .and_then(|account| account.get("minecraftProfile"))
+            .and_then(|profile| profile.get("name"))
+            .and_then(|item| item.as_str())
+            .and_then(sanitize_minecraft_nickname)
+        {
+            return Some(name);
+        }
+    }
+
+    for account in accounts.values() {
+        if let Some(name) = account
+            .get("minecraftProfile")
+            .and_then(|profile| profile.get("name"))
+            .and_then(|item| item.as_str())
+            .and_then(sanitize_minecraft_nickname)
+        {
+            return Some(name);
+        }
+    }
+
+    None
 }
 
 fn parse_launcher_profiles_nick(contents: &str) -> Option<String> {
@@ -381,23 +628,48 @@ fn parse_launcher_profiles_nick(contents: &str) -> Option<String> {
             return Some(display_name);
         }
     }
-    None
+
+    value
+        .as_object()
+        .and_then(|obj| obj.get("profiles"))
+        .and_then(|profiles| profiles.as_object())
+        .and_then(|profiles| profiles.values().find_map(|profile| profile.get("name")))
+        .and_then(|name| name.as_str())
+        .and_then(sanitize_minecraft_nickname)
 }
 
 fn parse_logs_nick(contents: &str) -> Option<String> {
     for line in contents.lines().rev() {
-        if let Some(index) = line.find("Setting user: ") {
-            let part = &line[index + "Setting user: ".len()..];
-            let nick = part
-                .chars()
-                .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
-                .collect::<String>();
-            if !nick.is_empty() {
-                return Some(nick);
+        for marker in ["Setting user: ", "Session Name is ", "Username: ", "Logged in as "] {
+            if let Some(index) = line.find(marker) {
+                let part = &line[index + marker.len()..];
+                let nick = part
+                    .chars()
+                    .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+                    .collect::<String>();
+                if let Some(name) = sanitize_minecraft_nickname(&nick) {
+                    return Some(name);
+                }
             }
         }
     }
     None
+}
+
+fn sanitize_minecraft_nickname(value: &str) -> Option<String> {
+    let normalized = value.trim();
+    if normalized.len() < 3 || normalized.len() > 16 {
+        return None;
+    }
+    normalized
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        .then_some(normalized.to_string())
+}
+
+fn read_text_lossy(path: &Path) -> Option<String> {
+    let bytes = fs::read(path).ok()?;
+    Some(String::from_utf8_lossy(&bytes).to_string())
 }
 
 fn status_description_to_string(value: &serde_json::Value) -> Option<String> {
