@@ -45,11 +45,18 @@ async fn start_hosting(
     local_port: u16,
     enable_geyser: bool,
     geyser_port: Option<u16>,
+    enable_e4mc: Option<bool>,
 ) -> Result<SwarmBootstrap, String> {
     let room_name_for_geyser = room_name.clone();
     let public_addr = state
         .manager
-        .start_hosting(app, room_name, password, local_port)
+        .start_hosting(
+            app,
+            room_name,
+            password,
+            local_port,
+            enable_e4mc.unwrap_or(state.manager.e4mc_enabled_by_default()),
+        )
         .await
         .map_err(|error| format!("{error:#}"))?;
 

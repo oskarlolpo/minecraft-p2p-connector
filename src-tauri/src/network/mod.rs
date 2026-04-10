@@ -1,3 +1,4 @@
+pub mod e4mc;
 pub mod geyser;
 pub mod manager;
 pub mod minecraft;

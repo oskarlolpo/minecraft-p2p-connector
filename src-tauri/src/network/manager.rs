@@ -20,6 +20,7 @@ use crate::{
 };
 
 use super::{
+    e4mc::{self, E4mcConfig},
     minecraft, proxy,
     relay::{self, RelayConfig},
 };
@@ -41,6 +42,7 @@ struct Inner {
     status: Arc<RwLock<NetworkStatus>>,
     stun: SignalingConfig,
     relay: RelayConfig,
+    e4mc: E4mcConfig,
 }
 
 struct SessionRuntime {
@@ -62,6 +64,7 @@ struct HostControl {
     expected_peers: Arc<RwLock<HashMap<SocketAddr, String>>>,
     live_connections: Arc<Mutex<HashMap<String, Connection>>>,
     relay_sessions: Arc<Mutex<HashMap<String, HostRelayRuntime>>>,
+    e4mc_runtime: Option<HostE4mcRuntime>,
 }
 
 struct ClientControl {
@@ -70,6 +73,11 @@ struct ClientControl {
 
 struct HostRelayRuntime {
     session_id: String,
+    cancel: CancellationToken,
+    task: JoinHandle<()>,
+}
+
+struct HostE4mcRuntime {
     cancel: CancellationToken,
     task: JoinHandle<()>,
 }
@@ -93,6 +101,7 @@ impl NetworkManager {
     pub fn new() -> Self {
         let stun = SignalingConfig::from_env();
         let relay = RelayConfig::from_env().expect("relay config must be valid");
+        let e4mc = E4mcConfig::from_env();
         let mut status = NetworkStatus {
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             ..Default::default()
@@ -106,6 +115,7 @@ impl NetworkManager {
                 status: Arc::new(RwLock::new(status)),
                 stun,
                 relay,
+                e4mc,
             }),
         }
     }
@@ -118,12 +128,17 @@ impl NetworkManager {
         self.inner.status.clone()
     }
 
+    pub fn e4mc_enabled_by_default(&self) -> bool {
+        self.inner.e4mc.enabled_by_default
+    }
+
     pub async fn start_hosting(
         &self,
-        _app: AppHandle,
+        app: AppHandle,
         room_name: String,
         password: Option<String>,
         local_port: u16,
+        enable_e4mc: bool,
     ) -> Result<String> {
         let room_name = room_name.trim().to_string();
         if room_name.is_empty() {
@@ -137,7 +152,7 @@ impl NetworkManager {
         self.reset_session().await;
 
         match self
-            .start_hosting_inner(room_name, password, local_port)
+            .start_hosting_inner(app, room_name, password, local_port, enable_e4mc)
             .await
         {
             Ok(peer_addr) => Ok(peer_addr),
@@ -220,15 +235,22 @@ impl NetworkManager {
 
     async fn start_hosting_inner(
         &self,
+        app: AppHandle,
         room_name: String,
         password: Option<String>,
         local_port: u16,
+        enable_e4mc: bool,
     ) -> Result<String> {
         let peer_id = Uuid::new_v4().to_string();
         let expected_peers = Arc::new(RwLock::new(HashMap::<SocketAddr, String>::new()));
         let live_connections = Arc::new(Mutex::new(HashMap::<String, Connection>::new()));
         let relay_sessions = Arc::new(Mutex::new(HashMap::<String, HostRelayRuntime>::new()));
         let has_password = password.is_some();
+        let e4mc_runtime = if enable_e4mc {
+            Some(self.spawn_e4mc_host_runtime(app, local_port))
+        } else {
+            None
+        };
 
         self.overwrite_status(NetworkStatus {
             mode: SessionMode::Host,
@@ -311,6 +333,7 @@ impl NetworkManager {
                 expected_peers,
                 live_connections,
                 relay_sessions,
+                e4mc_runtime,
             }),
         });
 
@@ -1017,6 +1040,10 @@ impl NetworkManager {
                     for (_, connection) in live_connections.drain() {
                         connection.close(VarInt::from_u32(0), b"session-reset");
                     }
+                    if let Some(runtime) = host.e4mc_runtime {
+                        runtime.cancel.cancel();
+                        runtime.task.abort();
+                    }
                     let mut relay_sessions = host.relay_sessions.lock().await;
                     for (_, runtime) in relay_sessions.drain() {
                         runtime.cancel.cancel();
@@ -1041,6 +1068,60 @@ impl NetworkManager {
         };
         status.logs.push("Session cleared.".into());
         self.overwrite_status(status).await;
+    }
+
+    fn spawn_e4mc_host_runtime(&self, app: AppHandle, local_game_port: u16) -> HostE4mcRuntime {
+        let manager = self.clone();
+        let config = self.inner.e4mc.clone();
+        let cancel = CancellationToken::new();
+        let task_cancel = cancel.clone();
+
+        let task = tokio::spawn(async move {
+            manager
+                .push_log(format!(
+                    "Starting e4mc public fallback for local Minecraft 127.0.0.1:{local_game_port}."
+                ))
+                .await;
+
+            match e4mc::start_host_runtime(config, local_game_port, task_cancel.clone()).await {
+                Ok(runtime) => {
+                    let domain = runtime.domain.clone();
+                    manager
+                        .mutate_status(|status| {
+                            status.e4mc_domain = Some(domain.clone());
+                            status.public_join_address = Some(domain.clone());
+                            if status.transport_path.is_none() {
+                                status.transport_path = Some("e4mc-public".into());
+                            }
+                            status.note = Some(format!(
+                                "Host is active. Direct transport remains primary, public fallback is ready at {domain}."
+                            ));
+                        })
+                        .await;
+                    manager
+                        .push_log(format!("e4mc public domain assigned: {domain}"))
+                        .await;
+                    let _ = app.emit("e4mc_domain_ready", serde_json::json!({ "domain": domain }));
+
+                    if let Err(error) = runtime.wait().await {
+                        if !task_cancel.is_cancelled() {
+                            manager
+                                .set_nonfatal(format!("e4mc session terminated: {error:#}"))
+                                .await;
+                        }
+                    }
+                }
+                Err(error) => {
+                    if !task_cancel.is_cancelled() {
+                        manager
+                            .set_nonfatal(format!("e4mc fallback unavailable: {error:#}"))
+                            .await;
+                    }
+                }
+            }
+        });
+
+        HostE4mcRuntime { cancel, task }
     }
 
     async fn overwrite_status(&self, status: NetworkStatus) {

@@ -25,6 +25,7 @@ const autoDetectPortEl = document.querySelector("#auto-detect-port");
 const enableGeyserEl = document.querySelector("#enable-geyser");
 const geyserPortFieldEl = document.querySelector("#geyser-port-field");
 const geyserPortEl = document.querySelector("#geyser-port");
+const enableE4mcEl = document.querySelector("#enable-e4mc");
 const hostButtonEl = document.querySelector("#host-button");
 const stopButtonEl = document.querySelector("#stop-button");
 const refreshLobbyEl = document.querySelector("#refresh-lobby");
@@ -81,6 +82,7 @@ const externalHostAddressEl = document.querySelector("#external-host-address");
 
 const PROFILE_STORAGE_KEY = "minecraft-p2p-profile-v1";
 const EXTERNAL_SERVERS_STORAGE_KEY = "minecraft-p2p-external-servers-v1";
+const E4MC_FALLBACK_STORAGE_KEY = "minecraft-p2p-enable-e4mc";
 const CP1251_EXTRA_ENCODE_MAP = {
   "Ђ": 0x80, "Ѓ": 0x81, "‚": 0x82, "ѓ": 0x83, "„": 0x84, "…": 0x85, "†": 0x86, "‡": 0x87,
   "€": 0x88, "‰": 0x89, "Љ": 0x8a, "‹": 0x8b, "Њ": 0x8c, "Ќ": 0x8d, "Ћ": 0x8e, "Џ": 0x8f,
@@ -102,6 +104,8 @@ const hostSession = {
   localPort: 25565,
   maxPlayers: 30,
   minecraftVersion: null,
+  publicJoinAddress: null,
+  e4mcDomain: null,
   presencePayload: null,
   presenceEntered: false,
 };
@@ -129,7 +133,17 @@ const state = {
   peerProfiles: new Map(),
   updateInfo: null,
   detectedMinecraftNickname: null,
+  e4mcEnabled: loadE4mcPreference(),
 };
+
+function loadE4mcPreference() {
+  const value = localStorage.getItem(E4MC_FALLBACK_STORAGE_KEY);
+  return value == null ? true : value === "true";
+}
+
+function saveE4mcPreference(value) {
+  localStorage.setItem(E4MC_FALLBACK_STORAGE_KEY, String(Boolean(value)));
+}
 
 function ensureClientId() {
   const key = "minecraft-p2p-client-id";
@@ -259,6 +273,7 @@ function syncExternalHostMode() {
   passwordFieldGroupEl?.classList.toggle("hidden", external || !requirePasswordEl.checked);
   enableGeyserEl?.closest(".checkbox-row")?.classList.toggle("hidden", external);
   geyserPortFieldEl?.classList.toggle("hidden", external || !enableGeyserEl.checked);
+  enableE4mcEl?.closest(".checkbox-row")?.classList.toggle("hidden", external);
   hostButtonEl.textContent = t(external ? "modalExternalButton" : "modalHostButton");
 }
 
@@ -464,6 +479,7 @@ function syncPasswordField() {
 
 function openModal() {
   if (!canOpenHostModal()) return;
+  if (enableE4mcEl) enableE4mcEl.checked = Boolean(state.e4mcEnabled);
   modalEl.classList.remove("hidden");
   modalEl.setAttribute("aria-hidden", "false");
   setTimeout(() => roomNameEl.focus(), 30);
@@ -608,14 +624,23 @@ function deriveBedrockEndpoint(endpoint, bedrockPort) {
 }
 
 function canAdvertiseHost() {
-  return Boolean(hostSession.active && hostSession.peerId && advertisedEndpoint(hostSession.listenAddrs, hostSession.peerAddr));
+  return Boolean(
+    hostSession.active &&
+      hostSession.peerId &&
+      (advertisedEndpoint(hostSession.listenAddrs, hostSession.peerAddr) ||
+        hostSession.publicJoinAddress ||
+        hostSession.e4mcDomain),
+  );
 }
 
 function renderSelectedServer() {
   const selected = getSelectedServer();
   const bedrockEndpoint =
     selected?.bedrockEndpoint ?? (selected ? deriveBedrockEndpoint(selected.peerAddr, selected.bedrockPort) : null);
-  const javaEndpoint = selected?.peerAddr ? toSocketEndpoint(selected.peerAddr) ?? selected.peerAddr : null;
+  const javaEndpoint =
+    selected?.publicJoinAddress ??
+    selected?.joinAddress ??
+    (selected?.peerAddr ? toSocketEndpoint(selected.peerAddr) ?? selected.peerAddr : null);
   selectedServerEl.textContent = selected ? selected.roomName : t("noSelection");
   selectedEndpointEl.textContent = javaEndpoint ?? "n/a";
   selectedBedrockEndpointEl.textContent = bedrockEndpoint ?? "n/a";
@@ -662,7 +687,7 @@ function syncButtons() {
   connectSelectedEl.textContent = state.pendingConnects.has(selected?.clientId ?? "")
     ? t("connectBusyButton")
     : t("connectButton");
-  copySelectedEndpointEl.disabled = !selected?.peerAddr;
+  copySelectedEndpointEl.disabled = !(selected?.publicJoinAddress || selected?.joinAddress || selected?.peerAddr);
   copySelectedBedrockEndpointEl.disabled = !deriveBedrockEndpoint(selected?.peerAddr, selected?.bedrockPort);
   hostLockNoteEl.textContent = clientLocked
     ? t("hostNoteClientLocked")
@@ -677,6 +702,7 @@ function renderSessionCard() {
   const status = state.status;
   const mode = status?.mode ?? "idle";
   const version = status?.minecraftVersion ?? hostSession.minecraftVersion ?? t("serverUnknownVersion");
+  const publicJavaEndpoint = hostSession.publicJoinAddress ?? status?.publicJoinAddress ?? toSocketEndpoint(hostSession.peerAddr) ?? hostSession.peerAddr;
   const hostBedrockEndpoint = deriveBedrockEndpoint(status?.publicUdpAddr, status?.bedrockPort);
   const online = Math.max(1, (status?.peerCount ?? 0) + 1);
   const maxPlayers = Math.max(online, hostSession.maxPlayers ?? 30);
@@ -727,13 +753,18 @@ function renderSessionCard() {
           <span class="host-meta-pill">${escapeHtml(t("hostCardPort", { port: hostSession.localPort }))}</span>
           <span class="host-meta-pill">${escapeHtml(hostSession.hasPassword ? t("hostCardPasswordOn") : t("hostCardPasswordOff"))}</span>
           ${
+            status?.e4mcDomain
+              ? `<span class="host-meta-pill">${escapeHtml(t("hostCardE4mc", { domain: status.e4mcDomain }))}</span>`
+              : ""
+          }
+          ${
             status?.geyserEnabled && hostBedrockEndpoint
               ? `<span class="host-meta-pill">${escapeHtml(t("hostCardGeyser", { endpoint: hostBedrockEndpoint }))}</span>`
               : ""
           }
         </div>
         <div class="active-host-tools">
-          ${hostSession.peerAddr ? `<button class="ghost-button" type="button" data-copy-host-java="${escapeHtml(hostSession.peerAddr)}">${escapeHtml(t("copyIpButton"))}</button>` : ""}
+          ${publicJavaEndpoint ? `<button class="ghost-button" type="button" data-copy-host-java="${escapeHtml(publicJavaEndpoint)}">${escapeHtml(t("copyIpButton"))}</button>` : ""}
           ${hostBedrockEndpoint ? `<button class="ghost-button" type="button" data-copy-host-bedrock="${escapeHtml(hostBedrockEndpoint)}">${escapeHtml(t("copyBedrockIpButton"))}</button>` : ""}
         </div>
       </div>
@@ -922,6 +953,8 @@ function hydrateServers(members) {
         localPort: data.local_port ?? 25565,
         minecraftVersion: data.minecraft_version ?? null,
         transport: data.transport ?? null,
+        publicJoinAddress: data.public_join_address ?? data.socket_endpoint ?? null,
+        e4mcDomain: data.e4mc_domain ?? null,
         geyserEnabled: Boolean(data.geyser_enabled),
         bedrockPort: data.bedrock_port ?? null,
         bedrockEndpoint: data.bedrock_endpoint ?? null,
@@ -1023,6 +1056,8 @@ async function addExternalServerFromModal(roomName) {
 function buildPresencePayload(status) {
   const endpoint = advertisedEndpoint(hostSession.listenAddrs, hostSession.peerAddr);
   const socketEndpoint = toSocketEndpoint(endpoint);
+  const publicJoinAddress = hostSession.publicJoinAddress ?? status?.publicJoinAddress ?? socketEndpoint ?? null;
+  const e4mcDomain = hostSession.e4mcDomain ?? status?.e4mcDomain ?? null;
   const online = Math.max(1, (status?.peerCount ?? 0) + 1);
   const maxPlayers = Math.max(online, hostSession.maxPlayers ?? 30);
   return {
@@ -1035,6 +1070,8 @@ function buildPresencePayload(status) {
     listen_addrs: hostSession.listenAddrs,
     endpoint,
     socket_endpoint: socketEndpoint,
+    public_join_address: publicJoinAddress,
+    e4mc_domain: e4mcDomain,
     peer_addr: hostSession.peerAddr,
     local_port: hostSession.localPort,
     minecraft_version: hostSession.minecraftVersion ?? status?.minecraftVersion ?? null,
@@ -1054,6 +1091,8 @@ function syncHostSessionFromStatus(status) {
       advertisedEndpoint(hostSession.listenAddrs, status.publicUdpAddr ?? status.udpBindAddr) ?? hostSession.peerAddr;
     hostSession.localPort = status.localGamePort ?? hostSession.localPort;
     hostSession.minecraftVersion = status.minecraftVersion ?? hostSession.minecraftVersion;
+    hostSession.publicJoinAddress = status.publicJoinAddress ?? hostSession.publicJoinAddress;
+    hostSession.e4mcDomain = status.e4mcDomain ?? hostSession.e4mcDomain;
     return;
   }
   hostSession.active = false;
@@ -1061,6 +1100,8 @@ function syncHostSessionFromStatus(status) {
   hostSession.listenAddrs = [];
   hostSession.peerAddr = null;
   hostSession.minecraftVersion = null;
+  hostSession.publicJoinAddress = null;
+  hostSession.e4mcDomain = null;
   hostSession.presenceEntered = false;
 }
 
@@ -1088,7 +1129,7 @@ function renderStatus(status) {
   connectionStateEl.textContent = formatState(status.state);
   connectionStateEl.dataset.state = status.state ?? "idle";
   ablyStateEl.textContent = state.realtime?.connection.state ?? "offline";
-  publicEndpointEl.textContent = status.publicUdpAddr ?? status.udpBindAddr ?? "n/a";
+  publicEndpointEl.textContent = status.publicJoinAddress ?? status.publicUdpAddr ?? status.udpBindAddr ?? "n/a";
   sessionModeEl.textContent = formatMode(status.mode);
   currentVersionEl.textContent = status.minecraftVersion ?? t("serverUnknownVersion");
   statusNoteEl.textContent = decodeMojibakeIfNeeded(status.note ?? t("modeIdle"));
@@ -1218,13 +1259,14 @@ async function syncPresence(status, { force = false, enter = false } = {}) {
       await state.lobbyChannel.attach();
     }
     const shouldEnter = enter || !hostSession.presenceEntered;
+    const advertisedAddress = payload.public_join_address ?? payload.endpoint ?? "n/a";
     if (shouldEnter) {
       await state.lobbyChannel.presence.enter(payload);
-      addLog(t("hostStartedPresence", { room: hostSession.roomName, addr: hostSession.peerAddr }));
+      addLog(t("hostStartedPresence", { room: hostSession.roomName, addr: advertisedAddress }));
       hostSession.presenceEntered = true;
     } else {
       await state.lobbyChannel.presence.update(payload);
-      addLog(`Presence updated for ${hostSession.roomName} (${payload.endpoint ?? "n/a"}).`);
+      addLog(`Presence updated for ${hostSession.roomName} (${advertisedAddress}).`);
     }
     hostSession.presencePayload = serialized;
   } catch (error) {
@@ -1354,6 +1396,8 @@ async function startHosting() {
   const localPort = Number(localGamePortEl.value || 25565);
   const password = requirePasswordEl.checked ? roomPasswordEl.value.trim() || null : null;
   const enableGeyser = Boolean(enableGeyserEl.checked);
+  state.e4mcEnabled = Boolean(enableE4mcEl?.checked);
+  saveE4mcPreference(state.e4mcEnabled);
   const geyserPort = Number(geyserPortEl.value || 19132);
   hostButtonEl.disabled = true;
   state.tunnelReady = false;
@@ -1372,6 +1416,7 @@ async function startHosting() {
       localPort,
       enableGeyser,
       geyserPort,
+      enableE4mc: state.e4mcEnabled,
     });
     const status = await waitForStatus(
       (snapshot) => snapshot.mode === "host" && ["waitingForPeer", "hosting", "connected", "error"].includes(snapshot.state),
@@ -1386,6 +1431,8 @@ async function startHosting() {
     hostSession.peerAddr = advertisedEndpoint(hostSession.listenAddrs, status.publicUdpAddr ?? status.udpBindAddr);
     hostSession.localPort = localPort;
     hostSession.minecraftVersion = status.minecraftVersion ?? null;
+    hostSession.publicJoinAddress = status.publicJoinAddress ?? hostSession.publicJoinAddress;
+    hostSession.e4mcDomain = status.e4mcDomain ?? hostSession.e4mcDomain;
     try {
       const localMeta = await invoke("query_external_server", { host: "127.0.0.1", port: localPort });
       const maxPlayers = Number(localMeta?.maxPlayers ?? 0);
@@ -1432,6 +1479,8 @@ async function stopSession() {
     hostSession.localPort = 25565;
     hostSession.maxPlayers = 30;
     hostSession.minecraftVersion = null;
+    hostSession.publicJoinAddress = null;
+    hostSession.e4mcDomain = null;
     hostSession.presencePayload = null;
     hostSession.presenceEntered = false;
     state.selectedServerId = null;
@@ -1520,6 +1569,11 @@ async function connectToServer(server) {
     state.pendingConnects.delete(server.clientId);
     setMinecraftHint(t("hintFailed"), false);
     addLog(t("connectFailed", { error: String(error) }));
+    if (server.publicJoinAddress) {
+      await navigator.clipboard.writeText(server.publicJoinAddress);
+      addLog(t("connectFallbackCopied", { address: server.publicJoinAddress }));
+      setMinecraftHint(`${t("selectedAddressLabel")}: ${server.publicJoinAddress}`, true);
+    }
     renderServers();
   }
 }
@@ -1640,6 +1694,18 @@ await listen("hole_punch_success", async (event) => {
   addLog(`Hole punch success for ${event.payload?.peerId ?? "peer"}.`);
 });
 
+await listen("e4mc_domain_ready", async (event) => {
+  const domain = String(event.payload?.domain ?? "").trim();
+  if (!domain) return;
+  hostSession.publicJoinAddress = domain;
+  hostSession.e4mcDomain = domain;
+  addLog(t("e4mcReadyLog", { domain }));
+  const status = await invoke("get_status");
+  renderStatus(status);
+  await syncPresence(status, { force: true, enter: !hostSession.presenceEntered });
+  await refreshLobby();
+});
+
 navHomeEl.addEventListener("click", () => setPage("home"));
 navSettingsEl.addEventListener("click", () => setPage("settings"));
 openHostModalEl.addEventListener("click", openModal);
@@ -1669,8 +1735,12 @@ copyDiagnosticsEl.addEventListener("click", async () => {
 });
 copySelectedEndpointEl.addEventListener("click", async () => {
   const selected = getSelectedServer();
-  if (!selected?.peerAddr) return;
-  await navigator.clipboard.writeText(selected.joinAddress ?? (toSocketEndpoint(selected.peerAddr) ?? selected.peerAddr));
+  const endpoint =
+    selected?.publicJoinAddress ??
+    selected?.joinAddress ??
+    (selected?.peerAddr ? toSocketEndpoint(selected.peerAddr) ?? selected.peerAddr : null);
+  if (!endpoint) return;
+  await navigator.clipboard.writeText(endpoint);
   addLog(t("copiedIp"));
 });
 copySelectedBedrockEndpointEl.addEventListener("click", async () => {

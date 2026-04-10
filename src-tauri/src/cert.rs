@@ -22,12 +22,17 @@ pub fn build_server_config() -> Result<(ServerConfig, Vec<u8>)> {
 }
 
 pub fn build_insecure_client_config() -> Result<ClientConfig> {
+    build_insecure_client_config_with_alpn(&[])
+}
+
+pub fn build_insecure_client_config_with_alpn(alpn_protocols: &[Vec<u8>]) -> Result<ClientConfig> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let rustls_config = rustls::ClientConfig::builder_with_provider(provider.clone())
+    let mut rustls_config = rustls::ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(SkipServerVerification { provider }))
         .with_no_client_auth();
+    rustls_config.alpn_protocols = alpn_protocols.to_vec();
 
     let mut client_config = ClientConfig::new(Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(rustls_config)?,
