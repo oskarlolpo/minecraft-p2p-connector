@@ -1,6 +1,6 @@
 [package]
 name = "minecraft-p2p-connector"
-version = "0.3.21"
+version = "0.3.22"
 edition = "2021"
 rust-version = "1.83"
 description = "Low-latency Minecraft Java P2P LAN connector over QUIC"
@@ -14,7 +14,6 @@ anyhow = "1.0"
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 rcgen = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-rumqttc = { version = "0.24", default-features = false, features = ["use-rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -24,3 +23,6 @@ tokio-util = { version = "0.7", features = ["codec", "rt"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1.15", features = ["serde", "v4"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+socket2 = "0.5"

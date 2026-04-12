@@ -1,7 +1,7 @@
 use std::{io::ErrorKind, time::Duration};
 
 use anyhow::{anyhow, bail, Context, Result};
-use futures::{SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use socket2::{SockRef, TcpKeepalive};
 use tokio::{

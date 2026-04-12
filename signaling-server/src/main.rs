@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     net::SocketAddr,
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -33,6 +34,8 @@ struct SharedState {
     rooms: HashMap<String, Room>,
     peers: HashMap<String, PeerSession>,
     tokens: HashMap<String, String>,
+    /// WSS relay rooms: session_id → channel the host is waiting on.
+    relay_rooms: HashMap<String, RelayHostWaiter>,
 }
 
 #[derive(Clone, Default)]
@@ -106,6 +109,26 @@ struct UdpAck {
     observed_addr: String,
 }
 
+// ── WSS Relay types ─────────────────────────────────────────────────
+
+/// A host waiting for a client to join its relay room.
+struct RelayHostWaiter {
+    /// Send half of the host's WebSocket, held until a client arrives.
+    host_tx: mpsc::UnboundedSender<Message>,
+    /// The host's receive stream, handed off to the bridge task.
+    host_rx: Option<futures_util::stream::SplitStream<WebSocket>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum RelayHandshake {
+    HostRegister { session_id: String },
+    ClientJoin { session_id: String },
+    Registered { session_id: String },
+    Linked { session_id: String },
+    Error { message: String },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -130,6 +153,7 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
+        .route("/relay", get(relay_ws_handler))
         .with_state(state.clone());
 
     let listener = TcpListener::bind(ws_addr)
@@ -138,6 +162,7 @@ async fn main() -> Result<()> {
 
     info!("signaling websocket listening on {ws_addr}");
     info!("signaling UDP listening on {udp_addr}");
+    info!("WSS relay endpoint available at /relay");
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -515,3 +540,104 @@ fn read_socket_addr(key: &str, fallback: &str) -> SocketAddr {
                 .expect("fallback socket addr must be valid")
         })
 }
+
+// ── WSS Relay Logic ──────────────────────────────────────────────────
+
+async fn relay_ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_relay_socket(state, socket))
+}
+
+async fn handle_relay_socket(state: AppState, socket: WebSocket) {
+    let (mut sender, mut receiver) = socket.split();
+
+    // 1. Wait for handshake
+    let init_message = match receiver.next().await {
+        Some(Ok(Message::Text(text))) => match serde_json::from_str::<RelayHandshake>(&text) {
+            Ok(msg) => msg,
+            Err(e) => {
+                let _ = sender.send(Message::Text(serde_json::to_string(&RelayHandshake::Error { message: e.to_string() }).unwrap())).await;
+                return;
+            }
+        },
+        _ => return, // Invalid or closed
+    };
+
+    match init_message {
+        RelayHandshake::HostRegister { session_id } => {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            
+            // Register host in shared state
+            {
+                let mut shared = state.shared.lock().await;
+                shared.relay_rooms.insert(session_id.clone(), RelayHostWaiter {
+                    host_tx: tx,
+                    host_rx: Some(receiver), // Transfer ownership of the read half
+                });
+            }
+
+            // Acknowledge registration
+            if sender.send(Message::Text(serde_json::to_string(&RelayHandshake::Registered { session_id: session_id.clone() }).unwrap())).await.is_err() {
+                // Host disconnected immediately
+                state.shared.lock().await.relay_rooms.remove(&session_id);
+                return;
+            }
+
+            // Start draining messages from rx to the host's sender half
+            while let Some(msg) = rx.recv().await {
+                if sender.send(msg).await.is_err() {
+                    break;
+                }
+            }
+
+            // Cleanup when host disconnects
+            state.shared.lock().await.relay_rooms.remove(&session_id);
+        }
+        RelayHandshake::ClientJoin { session_id } => {
+            // Find the host
+            let host_waiter = {
+                let mut shared = state.shared.lock().await;
+                shared.relay_rooms.remove(&session_id)
+            };
+
+            let Some(mut host_waiter) = host_waiter else {
+                let _ = sender.send(Message::Text(serde_json::to_string(&RelayHandshake::Error { message: "Room not found or host left".into() }).unwrap())).await;
+                return;
+            };
+
+            // Acknowledge to client
+            if sender.send(Message::Text(serde_json::to_string(&RelayHandshake::Linked { session_id: session_id.clone() }).unwrap())).await.is_err() {
+                return; // Client disconnected
+            }
+
+            // We have both halves. We need to bridge them.
+            // Client: `sender`, `receiver`
+            // Host: `host_waiter.host_tx`, `host_waiter.host_rx` (Option)
+            
+            let Some(mut host_rx) = host_waiter.host_rx.take() else { return };
+            let host_tx = host_waiter.host_tx;
+
+            let bridge_task_1 = tokio::spawn(async move {
+                while let Some(Ok(msg)) = receiver.next().await {
+                    if host_tx.send(msg).is_err() { break; }
+                }
+            });
+
+            let bridge_task_2 = tokio::spawn(async move {
+                while let Some(Ok(msg)) = host_rx.next().await {
+                    if sender.send(msg).await.is_err() { break; }
+                }
+            });
+
+            // Wait for either to close
+            tokio::select! {
+                _ = bridge_task_1 => {}
+                _ = bridge_task_2 => {}
+            }
+        }
+        _ => {
+            // Unexpected initial message
+            let _ = sender.send(Message::Text(serde_json::to_string(&RelayHandshake::Error { message: "Expected HostRegister or ClientJoin".into() }).unwrap())).await;
+        }
+    }
+}
+

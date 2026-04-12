@@ -112,13 +112,15 @@ pub async fn start_host_runtime(
         .await
         .with_context(|| format!("failed to establish e4mc QUIC session to {}:{}", relay.host, relay.port))?;
 
-    let domain = request_domain_assignment(connection.clone())
+    let (domain, control_send, control_recv) = request_domain_assignment(connection.clone())
         .await
         .context("e4mc control channel did not return a domain")?;
 
     let task = tokio::spawn(run_e4mc_host_loop(
         endpoint,
         connection,
+        control_send,
+        control_recv,
         local_port,
         cancel,
     ));
@@ -167,7 +169,7 @@ fn build_quiclime_client_config() -> Result<ClientConfig> {
     build_insecure_client_config_with_alpn(&[QUICLIME_ALPN.to_vec()])
 }
 
-async fn request_domain_assignment(connection: Connection) -> Result<String> {
+async fn request_domain_assignment(connection: Connection) -> Result<(String, SendStream, RecvStream)> {
     let (mut send, mut recv) = connection
         .open_bi()
         .await
@@ -176,13 +178,13 @@ async fn request_domain_assignment(connection: Connection) -> Result<String> {
     send_control_message(&mut send, &json!({ "kind": "probe_capabilities" })).await?;
     send_control_message(&mut send, &json!({ "kind": "request_domain_assignment" })).await?;
 
-    let domain = timeout(CONTROL_TIMEOUT, async move {
+    let (domain, mut recv) = timeout(CONTROL_TIMEOUT, async move {
         loop {
             let envelope = recv_control_message(&mut recv).await?;
             match envelope.kind.as_str() {
                 "domain_assignment_complete" => {
                     if let Some(domain) = envelope.domain.filter(|value| !value.trim().is_empty()) {
-                        return Ok(domain);
+                        return Ok((domain, recv));
                     }
                     bail!("e4mc returned an empty domain");
                 }
@@ -202,7 +204,7 @@ async fn request_domain_assignment(connection: Connection) -> Result<String> {
     .await
     .context("timed out while waiting for e4mc domain assignment")??;
 
-    Ok(domain)
+    Ok((domain, send, recv))
 }
 
 async fn send_control_message(send: &mut SendStream, value: &serde_json::Value) -> Result<()> {
@@ -235,6 +237,8 @@ async fn recv_control_message(recv: &mut RecvStream) -> Result<ControlEnvelope> 
 async fn run_e4mc_host_loop(
     _endpoint: Endpoint,
     connection: Connection,
+    mut control_send: SendStream,
+    mut control_recv: RecvStream,
     local_port: u16,
     cancel: CancellationToken,
 ) -> Result<()> {
@@ -243,6 +247,11 @@ async fn run_e4mc_host_loop(
             _ = cancel.cancelled() => {
                 connection.close(0_u32.into(), b"session-stopped");
                 return Ok(());
+            }
+            // keep-alive ping
+            _ = tokio::time::sleep(Duration::from_secs(15)) => {
+                let _ = send_control_message(&mut control_send, &json!({ "kind": "ping" })).await;
+                continue;
             }
             incoming = connection.accept_bi() => incoming,
         };

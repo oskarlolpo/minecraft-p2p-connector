@@ -22,7 +22,7 @@ use crate::{
 use super::{
     e4mc::{self, E4mcConfig},
     minecraft, proxy,
-    relay::{self, RelayConfig},
+    wss_relay::{self, WssRelayConfig, WssRelayRuntime},
 };
 
 const ABLY_SIGNAL_LABEL: &str = "Ably Presence + Channels";
@@ -41,7 +41,7 @@ struct Inner {
     session: Mutex<Option<SessionRuntime>>,
     status: Arc<RwLock<NetworkStatus>>,
     stun: SignalingConfig,
-    relay: RelayConfig,
+    wss_relay_config: WssRelayConfig,
     e4mc: E4mcConfig,
 }
 
@@ -74,7 +74,7 @@ struct ClientControl {
 struct HostRelayRuntime {
     session_id: String,
     cancel: CancellationToken,
-    task: JoinHandle<()>,
+    runtime: WssRelayRuntime,
 }
 
 struct HostE4mcRuntime {
@@ -100,7 +100,7 @@ struct TunnelFailedEvent {
 impl NetworkManager {
     pub fn new() -> Self {
         let stun = SignalingConfig::from_env();
-        let relay = RelayConfig::from_env().expect("relay config must be valid");
+        let wss_relay_config = WssRelayConfig::from_env("".into());
         let e4mc = E4mcConfig::from_env();
         let mut status = NetworkStatus {
             signaling_server: ABLY_SIGNAL_LABEL.into(),
@@ -114,7 +114,7 @@ impl NetworkManager {
                 session: Mutex::new(None),
                 status: Arc::new(RwLock::new(status)),
                 stun,
-                relay,
+                wss_relay_config,
                 e4mc,
             }),
         }
@@ -868,27 +868,29 @@ impl NetworkManager {
     ) -> Result<()> {
         self.mutate_status(|status| {
             status.state = ConnectionState::Connecting;
-            status.transport_path = Some("ably-relay".into());
+            status.transport_path = Some("wss-relay".into());
             status.note = Some(
-                "Прямой QUIC не поднялся. Перехожу на резервный relay-маршрут через Ably MQTT."
+                "Прямой UDP туннель не поднялся. Перехожу на 100% надежный Секретный WSS туннель (порт 443)."
                     .into(),
             );
         })
         .await;
 
-        let runtime = relay::start_client_runtime(
-            self.inner.relay.clone(),
-            session_id.clone(),
+        let mut relay_config = self.inner.wss_relay_config.clone();
+        relay_config.session_id = session_id.clone();
+        
+        let runtime = wss_relay::start_client_runtime(
+            relay_config,
             cancel.clone(),
         )
         .await
-        .with_context(|| format!("failed to start relay client session {session_id}"))?;
+        .with_context(|| format!("failed to start WSS relay client session {session_id}"))?;
 
         self.mutate_status(|status| {
             status.state = ConnectionState::Connected;
-            status.transport_path = Some("ably-relay".into());
+            status.transport_path = Some("wss-relay".into());
             status.note = Some(
-                "Соединение установлено через relay fallback. Подключайтесь в Minecraft к localhost:25565."
+                "Полная маскировка. Соединение установлено через Секретный Туннель 443. Подключайтесь к localhost:25565."
                     .into(),
             );
             status.peers = vec![PeerInfo {
@@ -896,7 +898,7 @@ impl NetworkManager {
                 addr: peer_addr.to_string(),
                 connected: true,
                 ping_ms: None,
-                transport: Some("ably-relay".into()),
+                transport: Some("wss-relay".into()),
             }];
         })
         .await;
@@ -909,7 +911,7 @@ impl NetworkManager {
             TunnelEstablishedEvent {
                 peer_addr: peer_addr.to_string(),
                 minecraft_addr: proxy::MINECRAFT_LOCAL_ADDR.into(),
-                transport: "ably-relay".into(),
+                transport: "wss-relay".into(),
             },
         );
 
@@ -923,59 +925,40 @@ impl NetworkManager {
         session_id: String,
         local_game_port: u16,
     ) {
-        let relay_config = self.inner.relay.clone();
-        let manager = self.clone();
+        let mut relay_config = self.inner.wss_relay_config.clone();
+        relay_config.session_id = session_id.clone();
         let cancel = CancellationToken::new();
-        let task_cancel = cancel.clone();
-        let session_label = session_id.clone();
-        let session_label_for_task = session_label.clone();
-        let peer_label = peer_id.clone();
 
-        let task = tokio::spawn(async move {
-            match relay::start_host_runtime(relay_config, session_id, local_game_port, task_cancel.clone())
-                .await
-            {
-                Ok(runtime) => {
-                    if let Err(error) = runtime.wait().await {
-                        if !task_cancel.is_cancelled() {
-                            manager
-                                .set_nonfatal(format!(
-                                    "host relay session for {peer_label} failed: {error:#}"
-                                ))
-                                .await;
-                        }
-                    }
+        let runtime_result = wss_relay::start_host_runtime(relay_config, local_game_port, cancel.clone()).await;
+
+        match runtime_result {
+            Ok(runtime) => {
+                let replaced = relay_sessions.lock().await.insert(
+                    peer_id.clone(),
+                    HostRelayRuntime {
+                        session_id: session_id.clone(),
+                        cancel,
+                        runtime,
+                    },
+                );
+
+                if let Some(previous) = replaced {
+                    previous.cancel.cancel();
+                    previous.runtime.abort();
                 }
-                Err(error) => {
-                    if !task_cancel.is_cancelled() {
-                        manager
-                            .set_nonfatal(format!(
-                                "failed to bootstrap host relay session {session_label_for_task}: {error:#}"
-                            ))
-                            .await;
-                    }
-                }
+
+                self.push_log(format!(
+                    "Host armed WSS (443) relay fallback for {peer_id} via session {session_id}."
+                ))
+                .await;
             }
-        });
-
-        let replaced = relay_sessions.lock().await.insert(
-            peer_id.clone(),
-            HostRelayRuntime {
-                session_id: session_label.clone(),
-                cancel,
-                task,
-            },
-        );
-
-        if let Some(previous) = replaced {
-            previous.cancel.cancel();
-            previous.task.abort();
+            Err(error) => {
+                self.set_nonfatal(format!(
+                    "failed to bootstrap host WSS relay session {session_id}: {error:#}"
+                ))
+                .await;
+            }
         }
-
-        self.push_log(format!(
-            "Host armed relay fallback for {peer_id} via session {session_label}."
-        ))
-        .await;
     }
 
     async fn cancel_host_relay_for_peer(
@@ -985,9 +968,9 @@ impl NetworkManager {
     ) {
         if let Some(runtime) = relay_sessions.lock().await.remove(peer_id) {
             runtime.cancel.cancel();
-            runtime.task.abort();
+            runtime.runtime.abort();
             self.push_log(format!(
-                "Direct QUIC won for {peer_id}; relay session {} cancelled.",
+                "Direct QUIC won for {peer_id}; WSS relay session {} cancelled.",
                 runtime.session_id
             ))
             .await;
@@ -1057,7 +1040,7 @@ impl NetworkManager {
                     let mut relay_sessions = host.relay_sessions.lock().await;
                     for (_, runtime) in relay_sessions.drain() {
                         runtime.cancel.cancel();
-                        runtime.task.abort();
+                        runtime.runtime.abort();
                     }
                 }
                 SessionControl::Client(client) => {

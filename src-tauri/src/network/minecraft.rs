@@ -144,21 +144,33 @@ pub async fn detect_client_runtime_info() -> Result<MinecraftClientRuntimeInfo> 
 }
 
 pub async fn read_local_player_snapshot(port: u16) -> Result<LocalPlayerSnapshot> {
-    let response = detect_status_response("127.0.0.1", port).await?;
-    let players = response.players.unwrap_or(MinecraftPlayers {
-        online: 0,
-        max: 0,
-        sample: Vec::new(),
-    });
-    Ok(LocalPlayerSnapshot {
-        online_players: players.online,
-        max_players: players.max,
-        sample_names: players
-            .sample
-            .into_iter()
-            .filter_map(|sample| sanitize_minecraft_nickname(&sample.name))
-            .collect(),
-    })
+    let response = detect_status_response("127.0.0.1", port).await;
+    match response {
+        Ok(res) => {
+            let players = res.players.unwrap_or(MinecraftPlayers {
+                online: 0,
+                max: 0,
+                sample: Vec::new(),
+            });
+            Ok(LocalPlayerSnapshot {
+                online_players: players.online,
+                max_players: players.max,
+                sample_names: players
+                    .sample
+                    .into_iter()
+                    .filter_map(|sample| sanitize_minecraft_nickname(&sample.name))
+                    .collect(),
+            })
+        }
+        Err(error) => {
+            tracing::debug!("Failed to read local player snapshot: {error:#}");
+            Ok(LocalPlayerSnapshot {
+                online_players: 0,
+                max_players: 0,
+                sample_names: Vec::new(),
+            })
+        }
+    }
 }
 
 async fn query_status(host: &str, port: u16, protocol_version: i32) -> Result<StatusResponse> {

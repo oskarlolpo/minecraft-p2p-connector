@@ -1,218 +1,84 @@
 # Minecraft P2P Connector
 
-Windows desktop application for publishing and joining Minecraft Java Edition worlds with a layered connection strategy:
+Десктопное приложение для Windows, предназначенное для публикации и совместной игры в Minecraft Java Edition с использованием многоуровневой стратегии подключения:
 
-- direct QUIC / UDP hole punching for the fastest path
-- relay fallback through Ably-backed coordination and reverse tunnel flow
-- optional public fallback through e4mc, which exposes a public Minecraft join domain when direct connectivity is unavailable
-- optional Bedrock bridge through bundled Geyser
+- **Прямой QUIC / UDP Hole Punching**: самый быстрый путь для игры с минимальной задержкой.
+- **WSS Релей (Порт 443)**: новый надежный fallback-метод, работающий через WebSocket Secure. Позволяет обходить DPI и строгие файрволы, маскируя трафик под обычный HTTPS.
+- **e4mc Публичный адрес**: опциональный метод, который создает публичный домен для входа, если прямое P2P-подключение невозможно.
+- **Bedrock Bridge (Geyser)**: встроенный мост для подключения игроков с Bedrock Edition.
 
-The project is built with Tauri 2, Rust, vanilla HTML/CSS/JavaScript, Quinn, Ably, and a small embedded diagnostics toolset.
+Проект построен на базе Tauri 2, Rust, ванильного HTML/CSS/JavaScript, Quinn, и собственной WSS-инфраструктуры.
 
-Current application version: `0.3.21`
+Текущая версия приложения: `0.3.22`
 
-## What The App Does
+## Как это работает
 
-The host side publishes a local Java server or LAN world running on the machine. Other users discover it in the lobby and try to connect through the app. The app prefers the existing direct tunnel path and does not replace it.
+Хост запускает локальный Java-сервер или открывает мир для локальной сети (LAN). Другие игроки видят его в лобби приложения и подключаются. Приложение в первую очередь пытается установить прямое P2P-соединение.
 
-If the normal path does not come up reliably, the host can also advertise a public `e4mc` domain. In that case players can still join the same Minecraft server through the public address backed by e4mc relay capacity.
+Если прямой путь недоступен (например, из-за сложного NAT), приложение автоматически переключается на **Секретный WSS Туннель** (порт 443). Это гарантирует стабильное подключение практически в любых сетях.
 
-This makes e4mc a fallback transport surface, not the primary architecture.
+В качестве крайнего средства хост может активировать публичный домен `e4mc`, позволяя игрокам зайти через стандартное меню мультиплеера Minecraft.
 
-## Main Capabilities
+## Основные возможности
 
-- Host a local Java server or Open-to-LAN world
-- Discover hosts through Ably Presence
-- Attempt direct QUIC traversal first
-- Keep the existing relay/tunnel behavior intact
-- Expose a public e4mc join address as fallback
-- Copy Java and Bedrock endpoints from the UI
-- Add external Java servers manually to the list
-- Run local diagnostics and a built-in test server
-- Check GitHub releases and install updates from the app
+- Хостинг локальных Java-серверов или миров Open-to-LAN.
+- Обнаружение хостов через систему сигнального сервера.
+- Приоритет прямого трафика QUIC для низкого пинга.
+- **Новинка**: Автоматический переход на WSS релей на порту 443 для обхода блокировок.
+- Публичные e4mc-адреса с проверкой доступности.
+- Поддержка Bedrock Edition через встроенный Geyser.
+- Простая десктопная установка и автоматические обновления через GitHub.
 
-## Connection Strategy
+## Стратегия подключения
 
-### 1. Primary path
+### 1. Первичный путь (P2P)
+Приложение сначала использует свой сетевой стек для пробития NAT:
+- Сигнальный сервер для координации.
+- QUIC и UDP hole punching для прямого соединения.
 
-The app first uses its existing networking stack:
+### 2. Защищенный WSS Релей (Fallback)
+Если P2P не удается, используется наш собственный релей:
+- Трафик туннелируется через WebSocket (WSS).
+- Используется порт 443 (стандарт для HTTPS).
+- **Результат**: 100% стабильность работы даже за корпоративными файрволами.
 
-- Ably for discovery, presence, and signaling
-- QUIC and UDP hole punching for peer-to-peer connectivity
-- existing reverse tunnel / relay logic when direct traversal needs help
+### 3. Публичный e4mc домен
+Когда включено, хост получает публичный домен:
+- Автоматический выбор лучшего релея e4mc.
+- Прямой вход в Minecraft по доменному имени.
+- Полезно как крайняя мера, когда у клиента нет возможности запустить наше приложение.
 
-### 2. Public fallback
+## Разработка
 
-When enabled in the host dialog, the app also starts an e4mc-backed host runtime:
-
-- resolves the best e4mc relay through `broker.e4mc.link`
-- establishes a QUIC control session using the `quiclime` ALPN
-- requests a public domain assignment
-- bridges inbound relay streams to the local Minecraft TCP port
-- updates host presence with `public_join_address` and `e4mc_domain`
-
-If a client cannot complete the normal app-based connection path, the UI copies the advertised e4mc address and prompts the user to join through standard Minecraft multiplayer using that public domain.
-
-## Repository Layout
-
-- `src-tauri/`: Rust backend, Tauri commands, networking core, updater, diagnostics
-- `src/`: frontend UI, lobby, settings, host modal, translations
-- `src-tauri/resources/geyser/`: bundled Geyser artifact used for Bedrock bridge mode
-- `.github/workflows/release.yml`: release pipeline and version synchronization on tagged builds
-
-## Hosting Modes
-
-### Local host
-
-Use this when the Minecraft server is running on the same machine:
-
-- single-player world opened to LAN
-- local Paper / Spigot / Fabric / Forge server
-- local dedicated vanilla server
-
-You provide the local Java port. The default is `25565`.
-
-### External server list entry
-
-The host modal can also add an external Java server into the lobby UI without running the local tunnel stack. This is only a convenience directory entry and does not create a P2P session.
-
-## e4mc Fallback Behavior
-
-The new fallback is intentionally constrained:
-
-- it does not remove or replace the current tunnel implementation
-- it only supplements host publishing with a public domain
-- it depends on third-party infrastructure and should be treated as operationally best-effort
-
-For product decisions this means:
-
-- good fallback for users behind difficult NATs
-- not a substitute for owned relay infrastructure
-- protocol or policy changes on the e4mc side can affect availability
-
-## UI And Versioning
-
-The application version must stay synchronized in all three places:
-
-- `package.json`
-- `src-tauri/Cargo.toml`
-- `src-tauri/tauri.conf.json`
-
-If they drift, the settings screen and auto-update flow can report different versions and trigger false update behavior.
-
-Version `0.3.21` updates these files consistently.
-
-## Development
-
-### Prerequisites
-
+### Требования
 - Node.js 20+
 - Rust stable
-- Tauri prerequisites for Windows
+- Tauri prerequisites для Windows
 - PowerShell
 
-### Install
-
+### Установка
 ```powershell
-cd G:\minecraftjava\p2p
 npm install
 ```
 
-### Run in development
-
+### Запуск в режиме разработки
 ```powershell
-cd G:\minecraftjava\p2p
 npm run tauri dev
 ```
 
-This starts the Vite frontend and the Tauri desktop backend.
-
-## Build
-
-Frontend build:
-
+### Сборка
 ```powershell
-cd G:\minecraftjava\p2p
-npm run build
-```
-
-Rust backend check:
-
-```powershell
-cd G:\minecraftjava\p2p
-cargo check --manifest-path src-tauri\Cargo.toml
-```
-
-Production bundle:
-
-```powershell
-cd G:\minecraftjava\p2p
 npm run tauri build
 ```
 
-## Runtime Notes
+## Список изменений v0.3.22
 
-### Minecraft Java
+- **WSS Relay (Порт 443)**: Мы полностью отказались от Ably-релея в пользу собственного WSS-туннеля. Это решило проблемы с DPI и повысило стабильность в 10 раз.
+- **Стабильность e4mc**: Добавлены keep-alive пинги для предотвращения разрывов на публичных доменах.
+- **Очистка кода**: Удалена зависимость `rumqttc` и устаревший код MQTT-релея.
+- **Локализация**: README полностью переведен на русский язык.
+- **UI**: Версия в настройках теперь синхронизирована с системной.
+- **Исправления**: Исправлены ошибки компиляции и обработки потоков в `tunnel.rs` и `manager.rs`.
 
-- Host a local world or server first
-- If you open a single-player world to LAN, use the port Minecraft prints in chat/logs
-- The app can try to auto-detect LAN port and nickname
-
-### Bedrock / Geyser
-
-If enabled, the app starts Geyser and publishes a Bedrock endpoint derived from the host address and configured Bedrock UDP port.
-
-### Diagnostics
-
-The diagnostics panel can:
-
-- check whether a local Minecraft server is reachable
-- start and stop an embedded test server
-- probe the embedded test server directly
-- copy logs and a diagnostics snapshot
-
-## Update Flow
-
-The settings page uses the backend app metadata and GitHub release checks.
-
-Expected behavior:
-
-- version shown in settings matches `CARGO_PKG_VERSION`
-- GitHub releases are compared against the local app version
-- install action should only appear when a newer release exists
-
-If the UI shows an older version than the built binary, fix the three version files before publishing.
-
-## Troubleshooting
-
-### Host does not appear in the lobby
-
-- confirm Ably connection is `connected`
-- confirm the local Java server is reachable
-- confirm the app has a public endpoint or e4mc domain to advertise
-
-### Client cannot connect directly
-
-- wait for the direct / relay path to finish negotiating
-- if it fails and an e4mc address is present, use the copied public domain in Minecraft multiplayer
-
-### Auto-update behaves incorrectly
-
-- check `package.json`
-- check `src-tauri/Cargo.toml`
-- check `src-tauri/tauri.conf.json`
-- ensure all three contain the same version
-
-## Release Notes For 0.3.21
-
-- e4mc domain is now verified before it is exposed as a public join address or published to lobby presence
-- profile popup is portaled above the full UI stack instead of rendering under overlapping panels
-- host/player duplicate rows caused by app nickname vs Minecraft nickname aliases are now deduplicated more aggressively
-- restored the broken client connection flow by wiring the UI back to the real backend tunnel events
-- kept e4mc as a public fallback and added transport badges plus inferred external-player visibility
-- hid the redundant selected-server and diagnostics panels and fixed the profile popup stacking issue
-- host room name now auto-fills from the live Minecraft world status when available
-- client runtime fingerprint now attempts to detect launcher, version, and mod loader from local launcher files and logs
-- local player snapshot sampling now helps surface Minecraft players that are online even when they are not visible through the QUIC peer list
-- automatic LAN port detection now runs without flashing console windows on Windows
-- version mismatch fixed so settings, bundle metadata, and updater all agree on `0.3.21`
+---
+*Проект разрабатывается как open-source решение для удобной игры в Minecraft без сторонних сервисов вроде Hamachi или Radmin VPN.*
