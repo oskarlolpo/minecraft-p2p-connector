@@ -437,7 +437,17 @@ fn parse_port_candidate(value: &str) -> Option<u16> {
     (port > 0).then_some(port)
 }
 
+#[derive(Debug, Clone)]
+struct JavaProcessMetadata {
+    pid: u32,
+    command_line: String,
+    working_dir: Option<PathBuf>,
+    server_port: Option<u16>,
+}
+
 fn detect_lan_port_from_system_listeners() -> Option<LanPortDetection> {
+    let java_processes = collect_java_process_metadata();
+    
     let output = hidden_command("netstat")
         .args(["-ano", "-p", "tcp"])
         .output()
@@ -447,9 +457,7 @@ fn detect_lan_port_from_system_listeners() -> Option<LanPortDetection> {
     }
 
     let content = String::from_utf8_lossy(&output.stdout);
-    let mut java_candidates = Vec::new();
-    let mut generic_candidates = Vec::new();
-    let mut java_pid_cache: HashMap<u32, bool> = HashMap::new();
+    let mut candidates = Vec::new();
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -475,30 +483,104 @@ fn detect_lan_port_from_system_listeners() -> Option<LanPortDetection> {
             continue;
         }
 
-        let candidate = (port, pid, local.to_string());
-        if *java_pid_cache
-            .entry(pid)
-            .or_insert_with(|| pid_looks_like_java(pid))
-        {
-            java_candidates.push(candidate);
-        } else {
-            generic_candidates.push(candidate);
+        if let Some(meta) = java_processes.get(&pid) {
+            let mut priority = 0;
+            
+            // 1. If it's the standard port 25565
+            if port == 25565 {
+                priority += 100;
+            }
+            
+            // 2. If it's the port defined in server.properties
+            if let Some(target) = meta.server_port {
+                if port == target {
+                    priority += 200;
+                }
+            }
+            
+            // 3. If command line suggests it's a server
+            let cmd = meta.command_line.to_lowercase();
+            if cmd.contains("-jar server.jar") || cmd.contains("purpur") || cmd.contains("paper") || cmd.contains("spigot") {
+                priority += 50;
+            }
+            
+            // 4. If it's a world open to LAN (usually large dynamic ports)
+            if port > 49151 {
+                priority += 10;
+            }
+
+            candidates.push((priority, port, pid, local.to_string()));
         }
     }
 
-    java_candidates.sort_by(|left, right| right.0.cmp(&left.0));
-    generic_candidates.sort_by(|left, right| right.0.cmp(&left.0));
+    // Sort by priority landing (highest first)
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
 
-    let picked = java_candidates
-        .first()
-        .or_else(|| generic_candidates.first())?;
+    let picked = candidates.first()?;
 
     Some(LanPortDetection {
-        port: picked.0,
-        source_path: "system:netstat".into(),
-        source_line: format!("netstat LISTENING {} pid {}", picked.2, picked.1),
+        port: picked.1,
+        source_path: "system:netstat+ps".into(),
+        source_line: format!("netstat LISTENING {} pid {} (priority {})", picked.3, picked.2, picked.0),
     })
 }
+
+fn collect_java_process_metadata() -> HashMap<u32, JavaProcessMetadata> {
+    let mut map = HashMap::new();
+    
+    let ps_script = "Get-CimInstance Win32_Process -Filter \"name = 'java.exe'\" | Select-Object ProcessId, CommandLine, WorkingDirectory | ConvertTo-Json";
+    let output = hidden_command("powershell")
+        .args(["-Command", ps_script])
+        .output();
+
+    let Ok(output) = output else { return map; };
+    if !output.status.success() { return map; }
+
+    let json_text = String::from_utf8_lossy(&output.stdout);
+    
+    // Axum/Serde can be tricky with single vs array JSON from PowerShell
+    #[derive(Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct PsProcess {
+        process_id: u32,
+        command_line: Option<String>,
+        working_directory: Option<String>,
+    }
+
+    let items: Vec<PsProcess> = if json_text.trim().starts_with('[') {
+        serde_json::from_str(&json_text).unwrap_or_default()
+    } else {
+        serde_json::from_str::<PsProcess>(&json_text)
+            .map(|i| vec![i])
+            .unwrap_or_default()
+    };
+
+    for item in items {
+        let working_dir = item.working_directory.as_ref().map(PathBuf::from);
+        let server_port = working_dir.as_ref().and_then(|path| {
+            let props = path.join("server.properties");
+            if props.exists() {
+                fs::read_to_string(props).ok().and_then(|c| {
+                    c.lines().find(|l| l.starts_with("server-port="))
+                        .and_then(|l| l.split('=').nth(1))
+                        .and_then(|v| v.trim().parse::<u16>().ok())
+                })
+            } else {
+                None
+            }
+        });
+
+        map.insert(item.process_id, JavaProcessMetadata {
+            pid: item.process_id,
+            command_line: item.command_line.unwrap_or_default(),
+            working_dir,
+            server_port,
+        });
+    }
+
+    map
+}
+
 
 fn split_host_port_label(value: &str) -> Option<(String, u16)> {
     if value.is_empty() {
@@ -524,30 +606,6 @@ fn is_local_bind_host(host: &str) -> bool {
     )
 }
 
-fn pid_looks_like_java(pid: u32) -> bool {
-    let output = hidden_command("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
-        .output();
-
-    let Ok(output) = output else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
-
-    let text = String::from_utf8_lossy(&output.stdout);
-    let line = text
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with("INFO:"));
-    let Some(line) = line else {
-        return false;
-    };
-    let first = line.split(',').next().unwrap_or_default();
-    let process_name = first.trim().trim_matches('"').to_ascii_lowercase();
-    process_name.contains("java")
-}
 
 fn hidden_command(program: &str) -> Command {
     let mut command = Command::new(program);

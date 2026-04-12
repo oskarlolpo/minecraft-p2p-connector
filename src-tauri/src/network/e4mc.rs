@@ -178,7 +178,7 @@ async fn request_domain_assignment(connection: Connection) -> Result<(String, Se
     send_control_message(&mut send, &json!({ "kind": "probe_capabilities" })).await?;
     send_control_message(&mut send, &json!({ "kind": "request_domain_assignment" })).await?;
 
-    let (domain, mut recv) = timeout(CONTROL_TIMEOUT, async move {
+    let (domain, recv) = timeout(CONTROL_TIMEOUT, async move {
         loop {
             let envelope = recv_control_message(&mut recv).await?;
             match envelope.kind.as_str() {
@@ -238,7 +238,7 @@ async fn run_e4mc_host_loop(
     _endpoint: Endpoint,
     connection: Connection,
     mut control_send: SendStream,
-    mut control_recv: RecvStream,
+    control_recv: RecvStream,
     local_port: u16,
     cancel: CancellationToken,
 ) -> Result<()> {
@@ -248,8 +248,8 @@ async fn run_e4mc_host_loop(
                 connection.close(0_u32.into(), b"session-stopped");
                 return Ok(());
             }
-            // keep-alive ping
-            _ = tokio::time::sleep(Duration::from_secs(15)) => {
+            // keep-alive ping every 10 seconds to satisfy strict relays
+            _ = tokio::time::sleep(Duration::from_secs(10)) => {
                 let _ = send_control_message(&mut control_send, &json!({ "kind": "ping" })).await;
                 continue;
             }

@@ -436,8 +436,8 @@ async fn client_session(
     // 3. Wait for link confirmation
     let ack = timeout(CONNECT_TIMEOUT, ws_read.next())
         .await
-        .context("WSS relay join timed out")?
-        .ok_or_else(|| anyhow!("WSS relay closed during join"))?
+        .context("WSS relay join timed out (check signaling server /relay endpoint)")?
+        .ok_or_else(|| anyhow!("WSS relay closed during join (signaling server rejected connection)"))?
         .context("WSS relay read error during join")?;
 
     match ack {
