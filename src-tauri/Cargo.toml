@@ -1,6 +1,6 @@
 [package]
 name = "minecraft-p2p-connector"
-version = "0.3.24"
+version = "0.3.25"
 edition = "2021"
 rust-version = "1.83"
 description = "Low-latency Minecraft Java P2P LAN connector over QUIC"

@@ -76,6 +76,7 @@ const settingsVersionEl = document.querySelector("#settings-version");
 const checkUpdatesEl = document.querySelector("#check-updates");
 const installUpdateEl = document.querySelector("#install-update");
 const updateStatusEl = document.querySelector("#update-status");
+const externalHostModeEl = document.querySelector("#external-host-mode");
 const externalHostAddressFieldEl = document.querySelector("#external-host-address-field");
 const externalHostAddressEl = document.querySelector("#external-host-address");
 
@@ -424,7 +425,7 @@ function closePortChoiceModal() {
 function renderIgnoredPorts() {
   if (!ignoredPortsListEl) return;
   if (state.ignoredPorts.length === 0) {
-    ignoredPortsListEl.innerHTML = `<div class="empty-state">${t("noServers")}</div>`;
+    ignoredPortsListEl.innerHTML = `<div class="empty-state">Список пуст</div>`;
     return;
   }
 
