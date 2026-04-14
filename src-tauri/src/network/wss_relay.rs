@@ -137,7 +137,12 @@ pub async fn start_host_runtime(
     local_game_port: u16,
     cancel: CancellationToken,
 ) -> Result<WssRelayRuntime> {
-    let join_handle = tokio::spawn(host_loop(config, local_game_port, cancel));
+    let (ready_tx, ready_rx) = oneshot::channel::<Result<()>>();
+    let join_handle = tokio::spawn(host_loop(config, local_game_port, cancel, Some(ready_tx)));
+    timeout(READY_TIMEOUT, ready_rx)
+        .await
+        .context("WSS relay host registration timed out")?
+        .context("WSS relay host ready channel dropped")??;
     Ok(WssRelayRuntime { join_handle })
 }
 
@@ -145,13 +150,14 @@ async fn host_loop(
     config: WssRelayConfig,
     local_game_port: u16,
     cancel: CancellationToken,
+    mut ready_signal: Option<oneshot::Sender<Result<()>>>,
 ) -> Result<()> {
     loop {
         if cancel.is_cancelled() {
             return Ok(());
         }
 
-        let result = host_session(&config, local_game_port, cancel.clone()).await;
+        let result = host_session(&config, local_game_port, cancel.clone(), &mut ready_signal).await;
 
         if cancel.is_cancelled() {
             return Ok(());
@@ -162,6 +168,9 @@ async fn host_loop(
                 tracing::info!("WSS relay host session ended cleanly, reconnecting...");
             }
             Err(error) => {
+                if let Some(tx) = ready_signal.take() {
+                    let _ = tx.send(Err(anyhow!("{error:#}")));
+                }
                 tracing::warn!("WSS relay host session error: {error:#}, reconnecting...");
             }
         }
@@ -174,6 +183,7 @@ async fn host_session(
     config: &WssRelayConfig,
     local_game_port: u16,
     cancel: CancellationToken,
+    ready_signal: &mut Option<oneshot::Sender<Result<()>>>,
 ) -> Result<()> {
     // 1. Connect to relay
     let (ws_stream, _) = timeout(CONNECT_TIMEOUT, connect_async(&config.relay_url))
@@ -202,6 +212,9 @@ async fn host_session(
             match msg {
                 HandshakeMessage::Registered { session_id } => {
                     tracing::info!("WSS relay host registered: session={session_id}");
+                    if let Some(tx) = ready_signal.take() {
+                        let _ = tx.send(Ok(()));
+                    }
                 }
                 HandshakeMessage::Error { message } => {
                     return Err(anyhow!("WSS relay error: {message}"));
@@ -372,7 +385,7 @@ pub async fn start_client_runtime(
     cancel: CancellationToken,
 ) -> Result<WssRelayRuntime> {
     // Verify connectivity and handshake before returning
-    let (ready_tx, ready_rx) = oneshot::channel::<()>();
+    let (ready_tx, ready_rx) = oneshot::channel::<Result<()>>();
 
     let join_handle = tokio::spawn(client_loop(config, cancel, Some(ready_tx)));
 
@@ -380,7 +393,7 @@ pub async fn start_client_runtime(
     timeout(READY_TIMEOUT, ready_rx)
         .await
         .context("WSS relay client ready timed out")?
-        .context("WSS relay client ready channel dropped")?;
+        .context("WSS relay client ready channel dropped")??;
 
     Ok(WssRelayRuntime { join_handle })
 }
@@ -388,14 +401,14 @@ pub async fn start_client_runtime(
 async fn client_loop(
     config: WssRelayConfig,
     cancel: CancellationToken,
-    mut ready_signal: Option<oneshot::Sender<()>>,
+    mut ready_signal: Option<oneshot::Sender<Result<()>>>,
 ) -> Result<()> {
     loop {
         if cancel.is_cancelled() {
             return Ok(());
         }
 
-        let result = client_session(&config, cancel.clone(), ready_signal.take()).await;
+        let result = client_session(&config, cancel.clone(), &mut ready_signal).await;
 
         if cancel.is_cancelled() {
             return Ok(());
@@ -406,6 +419,9 @@ async fn client_loop(
                 tracing::info!("WSS relay client session ended cleanly, reconnecting...");
             }
             Err(error) => {
+                if let Some(tx) = ready_signal.take() {
+                    let _ = tx.send(Err(anyhow!("{error:#}")));
+                }
                 tracing::warn!("WSS relay client session error: {error:#}, reconnecting...");
             }
         }
@@ -417,7 +433,7 @@ async fn client_loop(
 async fn client_session(
     config: &WssRelayConfig,
     cancel: CancellationToken,
-    mut ready_signal: Option<oneshot::Sender<()>>,
+    ready_signal: &mut Option<oneshot::Sender<Result<()>>>,
 ) -> Result<()> {
     // 1. Connect to relay
     let (ws_stream, _) = timeout(CONNECT_TIMEOUT, connect_async(&config.relay_url))
@@ -580,7 +596,7 @@ async fn client_session(
                         if !got_ready {
                             got_ready = true;
                             if let Some(tx) = ready_signal.take() {
-                                let _ = tx.send(());
+                                let _ = tx.send(Ok(()));
                             }
                         }
                     }

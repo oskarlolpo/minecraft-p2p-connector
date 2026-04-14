@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+﻿use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use quinn::{Connection, Endpoint, EndpointConfig, VarInt};
@@ -53,6 +53,7 @@ struct SessionRuntime {
 
 enum SessionControl {
     Host(HostControl),
+    PreparedClient(PreparedClientControl),
     Client(ClientControl),
 }
 
@@ -70,6 +71,13 @@ struct HostControl {
 
 struct ClientControl {
     peer_addr: SocketAddr,
+}
+
+struct PreparedClientControl {
+    peer_addr: SocketAddr,
+    peer_id: String,
+    punch_socket: Arc<UdpSocket>,
+    endpoint: Endpoint,
 }
 
 struct HostRelayRuntime {
@@ -107,7 +115,7 @@ impl NetworkManager {
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             ..Default::default()
         };
-        status.logs.push("Minecraft P2P Connector запущен.".into());
+        status.logs.push("Minecraft P2P Connector Р·Р°РїСѓС‰РµРЅ.".into());
 
         Self {
             inner: Arc::new(Inner {
@@ -143,10 +151,10 @@ impl NetworkManager {
     ) -> Result<String> {
         let room_name = room_name.trim().to_string();
         if room_name.is_empty() {
-            return Err(anyhow!("имя комнаты не должно быть пустым"));
+            return Err(anyhow!("РёРјСЏ РєРѕРјРЅР°С‚С‹ РЅРµ РґРѕР»Р¶РЅРѕ Р±С‹С‚СЊ РїСѓСЃС‚С‹Рј"));
         }
         if local_port == 0 {
-            return Err(anyhow!("порт локальной игры должен быть больше 0"));
+            return Err(anyhow!("РїРѕСЂС‚ Р»РѕРєР°Р»СЊРЅРѕР№ РёРіСЂС‹ РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ Р±РѕР»СЊС€Рµ 0"));
         }
 
         let _guard = self.inner.control.lock().await;
@@ -167,7 +175,7 @@ impl NetworkManager {
     pub async fn stop_hosting(&self) -> Result<()> {
         let _guard = self.inner.control.lock().await;
         self.reset_session().await;
-        self.push_log("Сессия остановлена.".into()).await;
+        self.push_log("РЎРµСЃСЃРёСЏ РѕСЃС‚Р°РЅРѕРІР»РµРЅР°.".into()).await;
         Ok(())
     }
 
@@ -180,12 +188,12 @@ impl NetworkManager {
     ) -> Result<()> {
         let peer_addr = peer_addr.trim().to_string();
         if peer_addr.is_empty() {
-            return Err(anyhow!("адрес peer не должен быть пустым"));
+            return Err(anyhow!("Р°РґСЂРµСЃ peer РЅРµ РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РїСѓСЃС‚С‹Рј"));
         }
 
         let peer_addr: SocketAddr = peer_addr
             .parse()
-            .with_context(|| format!("неверный socket address: {peer_addr}"))?;
+            .with_context(|| format!("РЅРµРІРµСЂРЅС‹Р№ socket address: {peer_addr}"))?;
 
         let _guard = self.inner.control.lock().await;
 
@@ -206,6 +214,126 @@ impl NetworkManager {
         .await
     }
 
+    pub async fn prepare_client_connect(
+        &self,
+        peer_addr: String,
+        peer_id: Option<String>,
+    ) -> Result<()> {
+        let peer_addr = peer_addr.trim().to_string();
+        if peer_addr.is_empty() {
+            return Err(anyhow!("Р°РґСЂРµСЃ peer РЅРµ РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РїСѓСЃС‚С‹Рј"));
+        }
+
+        let peer_addr: SocketAddr = peer_addr
+            .parse()
+            .with_context(|| format!("РЅРµРІРµСЂРЅС‹Р№ socket address: {peer_addr}"))?;
+        let peer_id = peer_id.unwrap_or_else(|| peer_addr.to_string());
+
+        let _guard = self.inner.control.lock().await;
+        self.reset_session().await;
+
+        let (prepared, udp_bind_addr, public_udp_addr) = self
+            .prepare_client_control(peer_addr, peer_id.clone())
+            .await?;
+        let cancel = CancellationToken::new();
+
+        self.overwrite_status(NetworkStatus {
+            mode: SessionMode::Client,
+            state: ConnectionState::WaitingForPeer,
+            udp_bind_addr: Some(udp_bind_addr.to_string()),
+            public_udp_addr: Some(public_udp_addr.to_string()),
+            signaling_server: ABLY_SIGNAL_LABEL.into(),
+            note: Some(
+                "РљР»РёРµРЅС‚СЃРєРёР№ UDP endpoint РїРѕРґРіРѕС‚РѕРІР»РµРЅ. Р–РґСѓ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ relay РѕС‚ С…РѕСЃС‚Р°.".into(),
+            ),
+            peers: vec![PeerInfo {
+                peer_id: peer_id.clone(),
+                addr: peer_addr.to_string(),
+                connected: false,
+                ping_ms: None,
+                transport: Some("direct-quic".into()),
+            }],
+            logs: vec![
+                format!("Client bind: {udp_bind_addr}"),
+                format!("Client public UDP: {public_udp_addr}"),
+                format!("Client target: {peer_addr}"),
+            ],
+            ..Default::default()
+        })
+        .await;
+
+        *self.inner.session.lock().await = Some(SessionRuntime {
+            cancel,
+            tasks: Vec::new(),
+            control: SessionControl::PreparedClient(prepared),
+        });
+
+        Ok(())
+    }
+
+    pub async fn commit_prepared_client_connect(
+        &self,
+        app: AppHandle,
+        relay_session_id: Option<String>,
+    ) -> Result<()> {
+        let _guard = self.inner.control.lock().await;
+        let mut session = self.inner.session.lock().await;
+        let Some(runtime) = session.take() else {
+            return Err(anyhow!("подготовленной клиентской сессии нет"));
+        };
+
+        let SessionRuntime {
+            cancel,
+            tasks,
+            control,
+        } = runtime;
+        let reconnect_cancel = cancel.clone();
+        let SessionControl::PreparedClient(prepared) = control else {
+            for task in tasks {
+                task.abort();
+            }
+            *session = Some(SessionRuntime {
+                cancel,
+                tasks: Vec::new(),
+                control,
+            });
+            return Err(anyhow!("клиентский endpoint не подготовлен"));
+        };
+        for task in tasks {
+            task.abort();
+        }
+
+        let peer_addr = prepared.peer_addr;
+        let peer_id = prepared.peer_id.clone();
+        let task = self.spawn_client_connect_task(
+            app,
+            prepared.punch_socket,
+            prepared.endpoint,
+            peer_addr,
+            prepared.peer_id,
+            relay_session_id,
+            reconnect_cancel,
+        );
+
+        *session = Some(SessionRuntime {
+            cancel,
+            tasks: vec![task],
+            control: SessionControl::Client(ClientControl { peer_addr }),
+        });
+        drop(session);
+
+        self.mutate_status(|status| {
+            status.mode = SessionMode::Client;
+            status.state = ConnectionState::Connecting;
+            status.note = Some(format!(
+                "Handshake подтвержден хостом {peer_id}. Пробую direct QUIC и fallback."
+            ));
+        })
+        .await;
+
+        Ok(())
+    }
+
     pub async fn kick_peer(&self, peer_id: String) -> Result<()> {
         let _guard = self.inner.control.lock().await;
 
@@ -213,10 +341,10 @@ impl NetworkManager {
             let session = self.inner.session.lock().await;
             let runtime = session
                 .as_ref()
-                .ok_or_else(|| anyhow!("активной сессии нет"))?;
+                .ok_or_else(|| anyhow!("Р°РєС‚РёРІРЅРѕР№ СЃРµСЃСЃРёРё РЅРµС‚"))?;
 
             let SessionControl::Host(host) = &runtime.control else {
-                return Err(anyhow!("выгнать игрока можно только из режима хоста"));
+                return Err(anyhow!("РІС‹РіРЅР°С‚СЊ РёРіСЂРѕРєР° РјРѕР¶РЅРѕ С‚РѕР»СЊРєРѕ РёР· СЂРµР¶РёРјР° С…РѕСЃС‚Р°"));
             };
 
             host.live_connections.clone()
@@ -224,12 +352,12 @@ impl NetworkManager {
 
         let connection = live_connections.lock().await.remove(&peer_id);
         let Some(connection) = connection else {
-            return Err(anyhow!("игрок {peer_id} не найден среди активных подключений"));
+            return Err(anyhow!("РёРіСЂРѕРє {peer_id} РЅРµ РЅР°Р№РґРµРЅ СЃСЂРµРґРё Р°РєС‚РёРІРЅС‹С… РїРѕРґРєР»СЋС‡РµРЅРёР№"));
         };
 
         connection.close(VarInt::from_u32(1), b"kicked-by-host");
         self.mark_peer_disconnected(&peer_id).await;
-        self.push_log(format!("Игрок {peer_id} отключён хостом."))
+        self.push_log(format!("РРіСЂРѕРє {peer_id} РѕС‚РєР»СЋС‡С‘РЅ С…РѕСЃС‚РѕРј."))
             .await;
         Ok(())
     }
@@ -260,8 +388,8 @@ impl NetworkManager {
             local_game_port: Some(local_port),
             password_protected: has_password,
             signaling_server: ABLY_SIGNAL_LABEL.into(),
-            note: Some("Поднимаю host endpoint и запрашиваю локальную версию Minecraft.".into()),
-            logs: vec![format!("Host стартует: {room_name}")],
+            note: Some("РџРѕРґРЅРёРјР°СЋ host endpoint Рё Р·Р°РїСЂР°С€РёРІР°СЋ Р»РѕРєР°Р»СЊРЅСѓСЋ РІРµСЂСЃРёСЋ Minecraft.".into()),
+            logs: vec![format!("Host СЃС‚Р°СЂС‚СѓРµС‚: {room_name}")],
             ..Default::default()
         })
         .await;
@@ -270,7 +398,7 @@ impl NetworkManager {
             Ok(version) => Some(version),
             Err(error) => {
                 self.push_log(format!(
-                    "Не удалось определить версию Minecraft на 127.0.0.1:{local_port}: {error:#}"
+                    "РќРµ СѓРґР°Р»РѕСЃСЊ РѕРїСЂРµРґРµР»РёС‚СЊ РІРµСЂСЃРёСЋ Minecraft РЅР° 127.0.0.1:{local_port}: {error:#}"
                 ))
                 .await;
                 None
@@ -286,7 +414,7 @@ impl NetworkManager {
             udp_socket,
             Arc::new(quinn::TokioRuntime),
         )
-        .context("не удалось создать host QUIC endpoint")?;
+        .context("РЅРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ host QUIC endpoint")?;
 
         self.overwrite_status(NetworkStatus {
             mode: SessionMode::Host,
@@ -299,14 +427,14 @@ impl NetworkManager {
             password_protected: has_password,
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             note: Some(format!(
-                "Хост активен. Комната: {room_name}. Локальный порт: {local_port}. Версия: {}.",
+                "РҐРѕСЃС‚ Р°РєС‚РёРІРµРЅ. РљРѕРјРЅР°С‚Р°: {room_name}. Р›РѕРєР°Р»СЊРЅС‹Р№ РїРѕСЂС‚: {local_port}. Р’РµСЂСЃРёСЏ: {}.",
                 minecraft_version
                     .clone()
-                    .unwrap_or_else(|| "Неизвестно".into())
+                    .unwrap_or_else(|| "РќРµРёР·РІРµСЃС‚РЅРѕ".into())
             )),
             logs: vec![
-                format!("Публичный UDP адрес: {public_udp_addr}"),
-                format!("Локальный bind: {udp_bind_addr}"),
+                format!("РџСѓР±Р»РёС‡РЅС‹Р№ UDP Р°РґСЂРµСЃ: {public_udp_addr}"),
+                format!("Р›РѕРєР°Р»СЊРЅС‹Р№ bind: {udp_bind_addr}"),
                 format!("Host forwards to {}", proxy::minecraft_local_addr(local_port)),
             ],
             ..Default::default()
@@ -378,7 +506,7 @@ impl NetworkManager {
         self.mutate_status(|status| {
             status.state = ConnectionState::Punching;
             status.note = Some(format!(
-                "Пробиваю UDP до клиента {display_peer}. Игра слушается на 127.0.0.1:{local_game_port}."
+                "РџСЂРѕР±РёРІР°СЋ UDP РґРѕ РєР»РёРµРЅС‚Р° {display_peer}. РРіСЂР° СЃР»СѓС€Р°РµС‚СЃСЏ РЅР° 127.0.0.1:{local_game_port}."
             ));
         })
         .await;
@@ -417,12 +545,41 @@ impl NetworkManager {
         peer_id: String,
         relay_session_id: Option<String>,
     ) -> Result<()> {
+        let (prepared, udp_bind_addr, public_udp_addr) = self
+            .prepare_client_control(peer_addr, peer_id.clone())
+            .await?;
         let cancel = CancellationToken::new();
-        let task = self.spawn_client_connect_flow(
+
+        self.overwrite_status(NetworkStatus {
+            mode: SessionMode::Client,
+            state: ConnectionState::WaitingForPeer,
+            udp_bind_addr: Some(udp_bind_addr.to_string()),
+            public_udp_addr: Some(public_udp_addr.to_string()),
+            signaling_server: ABLY_SIGNAL_LABEL.into(),
+            note: Some("РљР»РёРµРЅС‚ РіРѕС‚РѕРІ. РћС‚РїСЂР°РІР»СЏСЋ handshake Рё Р¶РґСѓ РѕС‚РІРµС‚ РѕС‚ С…РѕСЃС‚Р°.".into()),
+            peers: vec![PeerInfo {
+                peer_id: peer_id.clone(),
+                addr: peer_addr.to_string(),
+                connected: false,
+                ping_ms: None,
+                transport: Some("direct-quic".into()),
+            }],
+            logs: vec![
+                format!("Client bind: {udp_bind_addr}"),
+                format!("Client public UDP: {public_udp_addr}"),
+                format!("Client target: {peer_addr}"),
+            ],
+            ..Default::default()
+        })
+        .await;
+
+        let task = self.spawn_client_connect_task(
             app,
+            prepared.punch_socket,
+            prepared.endpoint,
             peer_addr,
-            peer_id.clone(),
-            relay_session_id.clone(),
+            prepared.peer_id,
+            relay_session_id,
             cancel.clone(),
         );
 
@@ -435,9 +592,40 @@ impl NetworkManager {
         Ok(())
     }
 
-    fn spawn_client_connect_flow(
+    async fn prepare_client_control(
+        &self,
+        peer_addr: SocketAddr,
+        peer_id: String,
+    ) -> Result<(PreparedClientControl, SocketAddr, SocketAddr)> {
+        let (udp_socket, punch_socket, udp_bind_addr) = Self::bind_shared_udp_socket()?;
+        let public_udp_addr = discover_public_addr(punch_socket.clone(), &self.inner.stun).await?;
+
+        let mut endpoint = Endpoint::new(
+            EndpointConfig::default(),
+            None,
+            udp_socket,
+            Arc::new(quinn::TokioRuntime),
+        )
+        .context("РЅРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ client QUIC endpoint")?;
+        endpoint.set_default_client_config(build_insecure_client_config()?);
+
+        Ok((
+            PreparedClientControl {
+                peer_addr,
+                peer_id,
+                punch_socket,
+                endpoint,
+            },
+            udp_bind_addr,
+            public_udp_addr,
+        ))
+    }
+
+    fn spawn_client_connect_task(
         &self,
         app: AppHandle,
+        punch_socket: Arc<UdpSocket>,
+        endpoint: Endpoint,
         peer_addr: SocketAddr,
         peer_id: String,
         relay_session_id: Option<String>,
@@ -448,6 +636,8 @@ impl NetworkManager {
             if let Err(error) = manager
                 .run_client_connect_flow(
                     app.clone(),
+                    punch_socket,
+                    endpoint,
                     peer_addr,
                     peer_id.clone(),
                     relay_session_id,
@@ -460,7 +650,7 @@ impl NetworkManager {
                         "tunnel_failed",
                         TunnelFailedEvent {
                             peer_addr: peer_addr.to_string(),
-                            reason: "Не удалось пробить NAT и установить туннель.".into(),
+                            reason: "РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕР±РёС‚СЊ NAT Рё СѓСЃС‚Р°РЅРѕРІРёС‚СЊ С‚СѓРЅРЅРµР»СЊ.".into(),
                         },
                     );
                     manager.mark_fatal(SessionMode::Client, None, &error).await;
@@ -472,54 +662,21 @@ impl NetworkManager {
     async fn run_client_connect_flow(
         &self,
         app: AppHandle,
+        punch_socket: Arc<UdpSocket>,
+        endpoint: Endpoint,
         peer_addr: SocketAddr,
         peer_id: String,
         relay_session_id: Option<String>,
         cancel: CancellationToken,
     ) -> Result<()> {
-        self.overwrite_status(NetworkStatus {
-            mode: SessionMode::Client,
-            state: ConnectionState::Starting,
-            signaling_server: ABLY_SIGNAL_LABEL.into(),
-            note: Some("Подготавливаю клиентский endpoint и вычисляю внешний UDP адрес.".into()),
-            logs: vec![format!("Client target: {peer_addr}")],
-            ..Default::default()
+        self.mutate_status(|status| {
+            status.mode = SessionMode::Client;
+            status.state = ConnectionState::Starting;
+            status.signaling_server = ABLY_SIGNAL_LABEL.into();
+            status.note = Some("Хост подтвердил handshake. Поднимаю direct QUIC и fallback.".into());
         })
         .await;
 
-        let (udp_socket, punch_socket, udp_bind_addr) = Self::bind_shared_udp_socket()?;
-        let public_udp_addr = discover_public_addr(punch_socket.clone(), &self.inner.stun).await?;
-
-        let mut endpoint = Endpoint::new(
-            EndpointConfig::default(),
-            None,
-            udp_socket,
-            Arc::new(quinn::TokioRuntime),
-        )
-        .context("не удалось создать client QUIC endpoint")?;
-        endpoint.set_default_client_config(build_insecure_client_config()?);
-
-        self.overwrite_status(NetworkStatus {
-            mode: SessionMode::Client,
-            state: ConnectionState::WaitingForPeer,
-            udp_bind_addr: Some(udp_bind_addr.to_string()),
-            public_udp_addr: Some(public_udp_addr.to_string()),
-            signaling_server: ABLY_SIGNAL_LABEL.into(),
-            note: Some("Клиент готов. Отправляю handshake и жду ответ от хоста.".into()),
-            peers: vec![PeerInfo {
-                peer_id: peer_id.clone(),
-                addr: peer_addr.to_string(),
-                connected: false,
-                ping_ms: None,
-                transport: Some("direct-quic".into()),
-            }],
-            logs: vec![
-                format!("Client bind: {udp_bind_addr}"),
-                format!("Client public UDP: {public_udp_addr}"),
-            ],
-            ..Default::default()
-        })
-        .await;
 
         let punch_handle = tokio::spawn({
             let socket = punch_socket.clone();
@@ -532,7 +689,7 @@ impl NetworkManager {
         });
 
         tokio::select! {
-            _ = cancel.cancelled() => return Err(anyhow!("подключение отменено")),
+            _ = cancel.cancelled() => return Err(anyhow!("РїРѕРґРєР»СЋС‡РµРЅРёРµ РѕС‚РјРµРЅРµРЅРѕ")),
             _ = tokio::time::sleep(Duration::from_millis(HOST_PUNCH_GRACE_MS)) => {}
         }
 
@@ -574,7 +731,7 @@ impl NetworkManager {
             .await
             .with_context(|| {
                 format!(
-                    "не удалось открыть локальный прокси на {}. Порт уже занят",
+                    "РЅРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєСЂС‹С‚СЊ Р»РѕРєР°Р»СЊРЅС‹Р№ РїСЂРѕРєСЃРё РЅР° {}. РџРѕСЂС‚ СѓР¶Рµ Р·Р°РЅСЏС‚",
                     proxy::MINECRAFT_LOCAL_ADDR
                 )
             })?;
@@ -583,7 +740,7 @@ impl NetworkManager {
             status.state = ConnectionState::Connected;
             status.transport_path = Some("direct-quic".into());
             status.note = Some(
-                "Соединение установлено. Подключайтесь в Minecraft к localhost:25565.".into(),
+                "РЎРѕРµРґРёРЅРµРЅРёРµ СѓСЃС‚Р°РЅРѕРІР»РµРЅРѕ. РџРѕРґРєР»СЋС‡Р°Р№С‚РµСЃСЊ РІ Minecraft Рє localhost:25565.".into(),
             );
             status.peers = vec![PeerInfo {
                 peer_id: peer_id.clone(),
@@ -594,7 +751,7 @@ impl NetworkManager {
             }];
         })
         .await;
-        self.push_log("Локальный proxy на 127.0.0.1:25565 поднят.".into())
+        self.push_log("Р›РѕРєР°Р»СЊРЅС‹Р№ proxy РЅР° 127.0.0.1:25565 РїРѕРґРЅСЏС‚.".into())
             .await;
         let _ = app.emit(
             "tunnel_established",
@@ -667,7 +824,7 @@ impl NetworkManager {
                             )
                             .await;
                         manager
-                            .push_log(format!("Host принял peer {peer_id} ({remote})"))
+                            .push_log(format!("Host РїСЂРёРЅСЏР» peer {peer_id} ({remote})"))
                             .await;
 
                         let connection_cancel = cancel.clone();
@@ -722,7 +879,7 @@ impl NetworkManager {
                             {
                                 manager
                                     .set_nonfatal(format!(
-                                        "локальный TCP->QUIC proxy завершился ошибкой: {error:#}"
+                                        "Р»РѕРєР°Р»СЊРЅС‹Р№ TCP->QUIC proxy Р·Р°РІРµСЂС€РёР»СЃСЏ РѕС€РёР±РєРѕР№: {error:#}"
                                     ))
                                     .await;
                                 tracing::warn!("client proxy stream failed: {error:#}");
@@ -856,7 +1013,7 @@ impl NetworkManager {
         }
 
         let (send, recv) = opened_stream.ok_or_else(|| {
-            last_error.unwrap_or_else(|| anyhow!("не удалось открыть QUIC stream до хоста"))
+            last_error.unwrap_or_else(|| anyhow!("РЅРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєСЂС‹С‚СЊ QUIC stream РґРѕ С…РѕСЃС‚Р°"))
         })?;
 
         proxy::bridge_client_tcp_to_quic(tcp_stream, send, recv).await
@@ -874,7 +1031,7 @@ impl NetworkManager {
             status.state = ConnectionState::Connecting;
             status.transport_path = Some("wss-relay".into());
             status.note = Some(
-                "Прямой UDP туннель не поднялся. Перехожу на 100% надежный Секретный WSS туннель (порт 443)."
+                "РџСЂСЏРјРѕР№ UDP С‚СѓРЅРЅРµР»СЊ РЅРµ РїРѕРґРЅСЏР»СЃСЏ. РџРµСЂРµС…РѕР¶Сѓ РЅР° 100% РЅР°РґРµР¶РЅС‹Р№ РЎРµРєСЂРµС‚РЅС‹Р№ WSS С‚СѓРЅРЅРµР»СЊ (РїРѕСЂС‚ 443)."
                     .into(),
             );
         })
@@ -894,7 +1051,7 @@ impl NetworkManager {
             status.state = ConnectionState::Connected;
             status.transport_path = Some("wss-relay".into());
             status.note = Some(
-                "Полная маскировка. Соединение установлено через Секретный Туннель 443. Подключайтесь к localhost:25565."
+                "РџРѕР»РЅР°СЏ РјР°СЃРєРёСЂРѕРІРєР°. РЎРѕРµРґРёРЅРµРЅРёРµ СѓСЃС‚Р°РЅРѕРІР»РµРЅРѕ С‡РµСЂРµР· РЎРµРєСЂРµС‚РЅС‹Р№ РўСѓРЅРЅРµР»СЊ 443. РџРѕРґРєР»СЋС‡Р°Р№С‚РµСЃСЊ Рє localhost:25565."
                     .into(),
             );
             status.peers = vec![PeerInfo {
@@ -991,20 +1148,20 @@ impl NetworkManager {
 
         for attempt in 1..=CLIENT_CONNECT_RETRY_ATTEMPTS {
             if cancel.is_cancelled() {
-                return Err(anyhow!("подключение отменено"));
+                return Err(anyhow!("РїРѕРґРєР»СЋС‡РµРЅРёРµ РѕС‚РјРµРЅРµРЅРѕ"));
             }
 
             self.mutate_status(|status| {
                 status.state = ConnectionState::Connecting;
                 status.note = Some(format!(
-                    "QUIC handshake, попытка {attempt}/{CLIENT_CONNECT_RETRY_ATTEMPTS}. Жду ответный NAT punch."
+                    "QUIC handshake, РїРѕРїС‹С‚РєР° {attempt}/{CLIENT_CONNECT_RETRY_ATTEMPTS}. Р–РґСѓ РѕС‚РІРµС‚РЅС‹Р№ NAT punch."
                 ));
             })
             .await;
 
             let connect = endpoint
                 .connect(peer_addr, "localhost")
-                .context("не удалось запустить QUIC connect")?;
+                .context("РЅРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїСѓСЃС‚РёС‚СЊ QUIC connect")?;
 
             match timeout(Duration::from_millis(CLIENT_CONNECT_TIMEOUT_MS), connect).await {
                 Ok(Ok(connection)) => return Ok(connection),
@@ -1015,7 +1172,7 @@ impl NetworkManager {
             tokio::time::sleep(Duration::from_millis(CLIENT_CONNECT_DELAY_MS)).await;
         }
 
-        Err(last_error.unwrap_or_else(|| anyhow!("не удалось установить QUIC session")))
+        Err(last_error.unwrap_or_else(|| anyhow!("РЅРµ СѓРґР°Р»РѕСЃСЊ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ QUIC session")))
     }
 
     fn bind_shared_udp_socket() -> Result<(std::net::UdpSocket, Arc<UdpSocket>, SocketAddr)> {
@@ -1047,8 +1204,15 @@ impl NetworkManager {
                         runtime.runtime.abort();
                     }
                 }
+                SessionControl::PreparedClient(client) => {
+                    self.push_log(format!(
+                        "Подготовленная клиентская сессия с {} очищена.",
+                        client.peer_addr
+                    ))
+                    .await;
+                }
                 SessionControl::Client(client) => {
-                    self.push_log(format!("Клиентская сессия с {} очищена.", client.peer_addr))
+                    self.push_log(format!("РљР»РёРµРЅС‚СЃРєР°СЏ СЃРµСЃСЃРёСЏ СЃ {} РѕС‡РёС‰РµРЅР°.", client.peer_addr))
                         .await;
                 }
             }
@@ -1289,7 +1453,7 @@ impl NetworkManager {
 
             if status.mode == SessionMode::Host {
                 status.state = ConnectionState::Hosting;
-                status.note = Some("Игрок отключился, хост остаётся активным.".into());
+                status.note = Some("РРіСЂРѕРє РѕС‚РєР»СЋС‡РёР»СЃСЏ, С…РѕСЃС‚ РѕСЃС‚Р°С‘С‚СЃСЏ Р°РєС‚РёРІРЅС‹Рј.".into());
             }
         })
         .await;
@@ -1317,7 +1481,7 @@ impl NetworkManager {
             room_code,
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             last_error: Some(formatted.clone()),
-            note: Some("Сессия завершилась с ошибкой.".into()),
+            note: Some("РЎРµСЃСЃРёСЏ Р·Р°РІРµСЂС€РёР»Р°СЃСЊ СЃ РѕС€РёР±РєРѕР№.".into()),
             logs: vec![formatted],
             ..Default::default()
         })
@@ -1334,3 +1498,4 @@ impl NetworkManager {
         }
     }
 }
+

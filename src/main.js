@@ -131,6 +131,7 @@ const state = {
   syncingPresence: false,
   pendingConnects: new Set(),
   pendingKicks: new Set(),
+  pendingRelayAcks: new Map(),
   tunnelReady: false,
   activeTunnelTransport: null,
   lastPreflight: null,
@@ -799,12 +800,12 @@ function normalizeToMultiaddr(value) {
   if (!/^\d+$/.test(port)) return trimmed;
 
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
-    return `/ip4/${host}/tcp/${port}`;
+    return `/ip4/${host}/udp/${port}/quic-v1`;
   }
   if (host.includes(":")) {
-    return `/ip6/${host}/tcp/${port}`;
+    return `/ip6/${host}/udp/${port}/quic-v1`;
   }
-  return `/dns4/${host}/tcp/${port}`;
+  return `/dns4/${host}/udp/${port}/quic-v1`;
 }
 
 function collectAdvertisedAddrs(bootstrap, status) {
@@ -830,13 +831,13 @@ function toSocketEndpoint(value) {
   const normalized = normalizeToMultiaddr(trimmed);
   if (!normalized?.startsWith("/")) return normalized;
   const parts = normalized.split("/");
-  if (parts.length >= 5 && parts[1] === "ip4" && parts[3] === "tcp") {
+  if (parts.length >= 5 && parts[1] === "ip4" && (parts[3] === "tcp" || parts[3] === "udp")) {
     return `${parts[2]}:${parts[4]}`;
   }
-  if (parts.length >= 5 && parts[1] === "ip6" && parts[3] === "tcp") {
+  if (parts.length >= 5 && parts[1] === "ip6" && (parts[3] === "tcp" || parts[3] === "udp")) {
     return `[${parts[2]}]:${parts[4]}`;
   }
-  if (parts.length >= 5 && parts[1] === "dns4" && parts[3] === "tcp") {
+  if (parts.length >= 5 && parts[1] === "dns4" && (parts[3] === "tcp" || parts[3] === "udp")) {
     return `${parts[2]}:${parts[4]}`;
   }
   return trimmed;
@@ -1508,9 +1509,29 @@ async function bindChannelHandlers() {
           relaySessionId,
         });
         addLog(t("hostPunchSent", { addr: peerAddr }));
+        await state.realtime.channels.get(`lobby:${requester}`).publish("connect-ack", {
+          relay_session_id: relaySessionId,
+          host_id: localClientId,
+        });
       } catch (error) {
         addLog(`Punch error: ${String(error)}`);
+        await state.realtime.channels.get(`lobby:${requester}`).publish("connect-reject", {
+          relay_session_id: relaySessionId,
+          host_id: localClientId,
+          error: String(error),
+        });
       }
+    });
+    await state.privateChannel.subscribe("connect-ack", (message) => {
+      const relaySessionId = message.data?.relay_session_id ?? null;
+      if (!relaySessionId) return;
+      state.pendingRelayAcks.get(relaySessionId)?.resolve(message.data ?? null);
+    });
+    await state.privateChannel.subscribe("connect-reject", (message) => {
+      const relaySessionId = message.data?.relay_session_id ?? null;
+      if (!relaySessionId) return;
+      const error = message.data?.error ? new Error(String(message.data.error)) : new Error("relay connect rejected by host");
+      state.pendingRelayAcks.get(relaySessionId)?.reject(error);
     });
     state.privateChannel.__mcp2pHandshakeBound = true;
   }
@@ -1600,6 +1621,28 @@ async function waitForStatus(predicate, timeoutMs = 6000) {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error("Timed out while waiting for backend status.");
+}
+
+function waitForRelayAck(relaySessionId, timeoutMs = 12000) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      state.pendingRelayAcks.delete(relaySessionId);
+      reject(new Error(`relay ack timed out after ${timeoutMs}ms for ${relaySessionId}`));
+    }, timeoutMs);
+
+    state.pendingRelayAcks.set(relaySessionId, {
+      resolve: (payload) => {
+        clearTimeout(timeout);
+        state.pendingRelayAcks.delete(relaySessionId);
+        resolve(payload);
+      },
+      reject: (error) => {
+        clearTimeout(timeout);
+        state.pendingRelayAcks.delete(relaySessionId);
+        reject(error);
+      },
+    });
+  });
 }
 
 async function runPreflightCheck({ silent = false } = {}) {
@@ -1850,35 +1893,46 @@ async function connectToServer(server) {
     const peerAddrs = sortAdvertisedAddrs(
       [...new Set([...(server.peerAddrs ?? []), normalizeToMultiaddr(server.peerAddr)].filter(Boolean))],
     );
-    await invoke("connect_to_peer", {
+    await invoke("prepare_client_connect", {
       peerId: server.peerId,
       peerAddrs,
-      relaySessionId,
     });
     const status = await waitForStatus(
       (snapshot) =>
         snapshot.mode === "client" &&
         Boolean(snapshot.publicUdpAddr ?? snapshot.udpBindAddr) &&
-        ["waitingForPeer", "connecting", "connected"].includes(snapshot.state),
+        ["waitingForPeer", "starting", "connecting", "connected"].includes(snapshot.state),
       8000,
     );
     renderStatus(status);
-      await state.realtime.channels.get(`lobby:${server.clientId}`).publish("connect-request", {
-        client_id: localClientId,
-        nickname: state.profile.nickname,
-        minecraft_nickname: state.detectedMinecraftNickname ?? null,
-        launcher: state.runtimeFingerprint?.launcher ?? null,
-        client_minecraft_version: state.runtimeFingerprint?.minecraftVersion ?? null,
-        mod_loader: state.runtimeFingerprint?.modLoader ?? null,
-        room_name: server.roomName,
-        peer_addr: status.publicUdpAddr ?? status.udpBindAddr,
-        relay_session_id: relaySessionId,
-      });
+    await state.realtime.channels.get(`lobby:${server.clientId}`).publish("connect-request", {
+      client_id: localClientId,
+      nickname: state.profile.nickname,
+      minecraft_nickname: state.detectedMinecraftNickname ?? null,
+      launcher: state.runtimeFingerprint?.launcher ?? null,
+      client_minecraft_version: state.runtimeFingerprint?.minecraftVersion ?? null,
+      mod_loader: state.runtimeFingerprint?.modLoader ?? null,
+      room_name: server.roomName,
+      peer_addr: status.publicUdpAddr ?? status.udpBindAddr,
+      relay_session_id: relaySessionId,
+    });
     addLog(t("connectRequestSent", { host: server.clientId }));
+    addLog(`Waiting for relay ack ${relaySessionId} from host ${server.clientId}.`);
+    await waitForRelayAck(relaySessionId, 12000);
+    addLog(`Relay ack received for ${relaySessionId}. Starting client tunnel.`);
+    await invoke("commit_prepared_client_connect", { relaySessionId });
   } catch (error) {
     state.pendingConnects.delete(server.clientId);
     setMinecraftHint(t("hintFailed"), false);
     addLog(t("connectFailed", { error: String(error) }));
+    try {
+      const snapshot = await invoke("get_status");
+      if (snapshot?.mode === "client" && snapshot?.state !== "connected") {
+        await invoke("stop_hosting");
+      }
+    } catch {
+      // no-op: best effort cleanup for prepared client state
+    }
     if (server.publicJoinAddress) {
       await navigator.clipboard.writeText(server.publicJoinAddress);
       addLog(t("connectFallbackCopied", { address: server.publicJoinAddress }));

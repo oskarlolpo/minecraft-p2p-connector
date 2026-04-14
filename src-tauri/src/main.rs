@@ -161,6 +161,37 @@ async fn connect_to_peer(
 }
 
 #[tauri::command]
+async fn prepare_client_connect(
+    state: State<'_, AppState>,
+    peer_id: String,
+    peer_addrs: Vec<String>,
+) -> Result<(), String> {
+    let peer_addr = peer_addrs
+        .iter()
+        .find_map(|value| multiaddr_or_socket_to_socket(value))
+        .ok_or_else(|| "не удалось извлечь socket address из peerAddrs".to_string())?;
+
+    state
+        .manager
+        .prepare_client_connect(peer_addr, (!peer_id.trim().is_empty()).then_some(peer_id))
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn commit_prepared_client_connect(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    relay_session_id: Option<String>,
+) -> Result<(), String> {
+    state
+        .manager
+        .commit_prepared_client_connect(app, relay_session_id)
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
 async fn kick_peer(state: State<'_, AppState>, peer_id: String) -> Result<(), String> {
     state
         .manager
@@ -436,6 +467,8 @@ fn main() {
             start_hosting,
             stop_hosting,
             connect_to_peer,
+            prepare_client_connect,
+            commit_prepared_client_connect,
             kick_peer,
             get_status,
             run_preflight,
@@ -461,8 +494,8 @@ fn main() {
 fn normalize_socket_addr_to_multiaddr(value: &str) -> String {
     if let Ok(socket) = value.parse::<std::net::SocketAddr>() {
         match socket.ip() {
-            std::net::IpAddr::V4(ip) => format!("/ip4/{ip}/tcp/{}", socket.port()),
-            std::net::IpAddr::V6(ip) => format!("/ip6/{ip}/tcp/{}", socket.port()),
+            std::net::IpAddr::V4(ip) => format!("/ip4/{ip}/udp/{}/quic-v1", socket.port()),
+            std::net::IpAddr::V6(ip) => format!("/ip6/{ip}/udp/{}/quic-v1", socket.port()),
         }
     } else {
         value.to_string()
@@ -476,10 +509,10 @@ fn multiaddr_or_socket_to_socket(value: &str) -> Option<String> {
     }
 
     let parts = trimmed.split('/').collect::<Vec<_>>();
-    if parts.len() >= 5 && parts[1] == "ip4" && parts[3] == "tcp" {
+    if parts.len() >= 5 && parts[1] == "ip4" && (parts[3] == "tcp" || parts[3] == "udp") {
         return Some(format!("{}:{}", parts[2], parts[4]));
     }
-    if parts.len() >= 5 && parts[1] == "ip6" && parts[3] == "tcp" {
+    if parts.len() >= 5 && parts[1] == "ip6" && (parts[3] == "tcp" || parts[3] == "udp") {
         return Some(format!("[{}]:{}", parts[2], parts[4]));
     }
 
