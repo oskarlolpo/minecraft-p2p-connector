@@ -10,7 +10,8 @@ mod signaling;
 
 use network::minecraft::{
     build_preflight_report, detect_client_runtime_info, detect_lan_port_from_logs,
-    detect_minecraft_nickname, probe_external_server, read_local_player_snapshot,
+    detect_minecraft_nickname, get_available_lan_ports_command, probe_external_server,
+    read_local_player_snapshot,
 };
 use network::manager::NetworkManager;
 use network::geyser::GeyserManager;
@@ -450,7 +451,8 @@ fn main() {
             start_test_server,
             stop_test_server,
             probe_test_server_command,
-            export_diagnostics_snapshot
+            export_diagnostics_snapshot,
+            get_available_lan_ports_command
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

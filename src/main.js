@@ -1,4 +1,4 @@
-﻿import * as Ably from "ably";
+import * as Ably from "ably";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -76,13 +76,20 @@ const settingsVersionEl = document.querySelector("#settings-version");
 const checkUpdatesEl = document.querySelector("#check-updates");
 const installUpdateEl = document.querySelector("#install-update");
 const updateStatusEl = document.querySelector("#update-status");
-const externalHostModeEl = document.querySelector("#external-host-mode");
 const externalHostAddressFieldEl = document.querySelector("#external-host-address-field");
 const externalHostAddressEl = document.querySelector("#external-host-address");
+
+const portChoiceModalEl = document.querySelector("#port-choice-modal");
+const closePortModalEl = document.querySelector("#close-port-modal");
+const closePortModalSecondaryEl = document.querySelector("#close-port-modal-secondary");
+const detectedPortsListEl = document.querySelector("#detected-ports-list");
+const clearIgnoredPortsEl = document.querySelector("#clear-ignored-ports");
+const ignoredPortsListEl = document.querySelector("#ignored-ports-list");
 
 const PROFILE_STORAGE_KEY = "minecraft-p2p-profile-v1";
 const EXTERNAL_SERVERS_STORAGE_KEY = "minecraft-p2p-external-servers-v1";
 const E4MC_FALLBACK_STORAGE_KEY = "minecraft-p2p-enable-e4mc";
+const IGNORED_PORTS_STORAGE_KEY = "minecraft-p2p-ignored-ports-v1";
 const CP1251_EXTRA_ENCODE_MAP = {
   "Ђ": 0x80, "Ѓ": 0x81, "‚": 0x82, "ѓ": 0x83, "„": 0x84, "…": 0x85, "†": 0x86, "‡": 0x87,
   "€": 0x88, "‰": 0x89, "Љ": 0x8a, "‹": 0x8b, "Њ": 0x8c, "Ќ": 0x8d, "Ћ": 0x8e, "Џ": 0x8f,
@@ -138,6 +145,7 @@ const state = {
   localWorldPlayers: [],
   lastLocalPlayerSyncAt: 0,
   e4mcEnabled: loadE4mcPreference(),
+  ignoredPorts: loadIgnoredPorts(),
 };
 
 function loadE4mcPreference() {
@@ -197,6 +205,20 @@ function loadPreferences() {
 
 function savePreference(key, value) {
   localStorage.setItem(key, value);
+}
+
+function loadIgnoredPorts() {
+  try {
+    const raw = localStorage.getItem(IGNORED_PORTS_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveIgnoredPorts() {
+  localStorage.setItem(IGNORED_PORTS_STORAGE_KEY, JSON.stringify(state.ignoredPorts));
 }
 
 function t(key, variables = {}) {
@@ -331,15 +353,96 @@ async function detectRuntimeFingerprint() {
 async function autoDetectLocalGamePort() {
   try {
     autoDetectPortEl.disabled = true;
-    const detection = await invoke("detect_lan_port");
-    localGamePortEl.value = String(detection.port);
-    addLog(t("autoPortDetected", { port: detection.port, path: detection.sourcePath }));
-    await autofillRoomNameFromLocalServer();
+    const ports = await invoke("get_available_lan_ports_command", { ignoredPorts: state.ignoredPorts });
+    
+    if (!ports || ports.length === 0) {
+      addLog(t("autoPortFailed", { error: "No ports found" }));
+      return;
+    }
+
+    if (ports.length === 1) {
+      const detection = ports[0];
+      localGamePortEl.value = String(detection.port);
+      addLog(t("autoPortDetected", { port: detection.port, path: detection.sourcePath }));
+      await autofillRoomNameFromLocalServer();
+    } else {
+      openPortChoiceModal(ports);
+    }
   } catch (error) {
     addLog(t("autoPortFailed", { error: String(error) }));
   } finally {
     autoDetectPortEl.disabled = false;
   }
+}
+
+function openPortChoiceModal(ports) {
+  detectedPortsListEl.innerHTML = "";
+  ports.forEach((det) => {
+    const item = document.createElement("div");
+    item.className = "port-item";
+    item.innerHTML = `
+      <div class="port-item-info">
+        <strong>Port ${det.port}</strong>
+        <span title="${det.source_path}">${t("portChoiceSource", { source: det.source_path })}</span>
+      </div>
+      <button class="primary-button mini-button" type="button">${t("portChoiceSelect")}</button>
+      <button class="ghost-button mini-button danger-button" type="button" title="${t("portChoiceIgnore")}">${t("portChoiceIgnore")}</button>
+    `;
+    
+    // Select button
+    item.querySelector(".primary-button").onclick = () => {
+      localGamePortEl.value = String(det.port);
+      addLog(t("autoPortDetected", { port: det.port, path: det.source_path }));
+      autofillRoomNameFromLocalServer();
+      closePortChoiceModal();
+    };
+
+    // Ignore button
+    item.querySelector(".danger-button").onclick = () => {
+      if (!state.ignoredPorts.includes(det.port)) {
+        state.ignoredPorts.push(det.port);
+        saveIgnoredPorts();
+        renderIgnoredPorts();
+      }
+      // Re-detect or just remove from this list? Let's re-detect to handle remaining items
+      autoDetectLocalGamePort();
+      closePortChoiceModal();
+    };
+
+    detectedPortsListEl.appendChild(item);
+  });
+
+  portChoiceModalEl.classList.remove("hidden");
+  portChoiceModalEl.setAttribute("aria-hidden", "false");
+}
+
+function closePortChoiceModal() {
+  portChoiceModalEl.classList.add("hidden");
+  portChoiceModalEl.setAttribute("aria-hidden", "true");
+}
+
+function renderIgnoredPorts() {
+  if (!ignoredPortsListEl) return;
+  if (state.ignoredPorts.length === 0) {
+    ignoredPortsListEl.innerHTML = `<div class="empty-state">${t("noServers")}</div>`;
+    return;
+  }
+
+  ignoredPortsListEl.innerHTML = state.ignoredPorts.map(port => `
+    <div class="tag-item">
+      <span>${port}</span>
+      <button class="remove-tag" data-port="${port}" type="button">×</button>
+    </div>
+  `).join("");
+
+  ignoredPortsListEl.querySelectorAll(".remove-tag").forEach(btn => {
+    btn.onclick = () => {
+      const port = Number(btn.dataset.port);
+      state.ignoredPorts = state.ignoredPorts.filter(p => p !== port);
+      saveIgnoredPorts();
+      renderIgnoredPorts();
+    };
+  });
 }
 
 async function autofillRoomNameFromLocalServer() {
@@ -1814,6 +1917,7 @@ function rerender() {
   applyTranslations();
   renderSettingsOptions();
   renderServers();
+  renderIgnoredPorts();
   renderStatus(
     state.status ?? {
       mode: "idle",
@@ -1993,6 +2097,17 @@ saveProfileEl.addEventListener("click", saveProfileFromInputs);
 checkUpdatesEl.addEventListener("click", checkForUpdates);
 installUpdateEl.addEventListener("click", installUpdate);
 
+closePortModalEl.addEventListener("click", closePortChoiceModal);
+closePortModalSecondaryEl.addEventListener("click", closePortChoiceModal);
+portChoiceModalEl.addEventListener("click", (event) => {
+  if (event.target instanceof HTMLElement && event.target.dataset.closeModalPort === "true") closePortChoiceModal();
+});
+clearIgnoredPortsEl.addEventListener("click", () => {
+  state.ignoredPorts = [];
+  saveIgnoredPorts();
+  renderIgnoredPorts();
+});
+
 serverListEl.addEventListener("click", async (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
@@ -2073,6 +2188,7 @@ renderSelectedServer();
 renderSessionCard();
 syncButtons();
 setPage("home");
+renderIgnoredPorts();
 await loadAppInfo();
 await detectMinecraftNickname();
 

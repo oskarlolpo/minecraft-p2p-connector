@@ -65,6 +65,7 @@ struct HostControl {
     live_connections: Arc<Mutex<HashMap<String, Connection>>>,
     relay_sessions: Arc<Mutex<HashMap<String, HostRelayRuntime>>>,
     e4mc_runtime: Option<HostE4mcRuntime>,
+    upnp_mapping: Option<super::upnp::UpnpMapping>,
 }
 
 struct ClientControl {
@@ -322,6 +323,8 @@ impl NetworkManager {
             cancel.clone(),
         );
 
+        let upnp_mapping = self.start_upnp_mapping(local_port).await;
+
         *self.inner.session.lock().await = Some(SessionRuntime {
             cancel,
             tasks: vec![accept_task],
@@ -334,6 +337,7 @@ impl NetworkManager {
                 live_connections,
                 relay_sessions,
                 e4mc_runtime,
+                upnp_mapping,
             }),
         });
 
@@ -1318,5 +1322,15 @@ impl NetworkManager {
             ..Default::default()
         })
         .await;
+    }
+
+    async fn start_upnp_mapping(&self, local_port: u16) -> Option<super::upnp::UpnpMapping> {
+        match super::upnp::UpnpMapping::attempt_map(local_port, "Minecraft P2P Connector").await {
+            Ok(mapping) => Some(mapping),
+            Err(e) => {
+                let _ = self.push_log(format!("UPnP mapping failed: {e:#}")).await;
+                None
+            }
+        }
     }
 }

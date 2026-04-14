@@ -143,6 +143,21 @@ pub async fn detect_client_runtime_info() -> Result<MinecraftClientRuntimeInfo> 
         .context("failed to await Minecraft runtime detector task")?
 }
 
+#[tauri::command]
+pub async fn get_available_lan_ports_command(ignored_ports: Vec<u16>) -> Result<Vec<LanPortDetection>, String> {
+    let all_detected = task::spawn_blocking(detect_all_lan_ports_blocking)
+        .await
+        .map_err(|e| format!("Task join error: {e}"))?
+        .map_err(|e| format!("Detection failed: {e}"))?;
+    
+    // Фильтруем игнорируемые порты
+    let filtered = all_detected.into_iter()
+        .filter(|d| !ignored_ports.contains(&d.port))
+        .collect();
+    
+    Ok(filtered)
+}
+
 pub async fn read_local_player_snapshot(port: u16) -> Result<LocalPlayerSnapshot> {
     let response = detect_status_response("127.0.0.1", port).await;
     match response {
@@ -229,23 +244,43 @@ async fn probe_local_tcp(port: u16) -> Result<()> {
     Ok(())
 }
 
-fn detect_lan_port_from_logs_blocking() -> Result<LanPortDetection> {
-    let candidates = collect_log_candidates()?;
-    for path in candidates {
-        if let Some(contents) = read_text_lossy(&path) {
-            if let Some(detection) = parse_lan_port_from_contents(&path, &contents) {
-                return Ok(detection);
+pub fn detect_all_lan_ports_blocking() -> Result<Vec<LanPortDetection>> {
+    let mut all_detections = Vec::new();
+
+    // 1. Поиск в логах
+    if let Ok(candidates) = collect_log_candidates() {
+        for path in candidates {
+            if let Some(contents) = read_text_lossy(&path) {
+                if let Some(detection) = parse_lan_port_from_contents(&path, &contents) {
+                    all_detections.push(detection);
+                }
             }
         }
     }
 
-    if let Some(detection) = detect_lan_port_from_system_listeners() {
-        return Ok(detection);
+    // 2. Поиск в активных слушателях системы (netstat)
+    all_detections.extend(detect_lan_ports_from_system_listeners());
+
+    // Убираем дубликаты по номеру порта
+    let mut unique = HashMap::new();
+    for det in all_detections {
+        unique.entry(det.port).or_insert(det);
     }
 
-    Err(anyhow!(
-        "could not find a recent 'Started serving on <port>' entry in Minecraft logs or active Java listeners"
-    ))
+    let mut result: Vec<LanPortDetection> = unique.into_values().collect();
+    // Сортируем (порты из логов обычно более надежные или свежие, если их нашли первыми)
+    result.sort_by_key(|d| d.port);
+
+    if result.is_empty() {
+        return Err(anyhow!("could not find any Minecraft LAN ports"));
+    }
+
+    Ok(result)
+}
+
+fn detect_lan_port_from_logs_blocking() -> Result<LanPortDetection> {
+    let ports = detect_all_lan_ports_blocking()?;
+    ports.into_iter().next().ok_or_else(|| anyhow!("No ports found"))
 }
 
 fn collect_log_candidates() -> Result<Vec<PathBuf>> {
@@ -445,15 +480,15 @@ struct JavaProcessMetadata {
     server_port: Option<u16>,
 }
 
-fn detect_lan_port_from_system_listeners() -> Option<LanPortDetection> {
+fn detect_lan_ports_from_system_listeners() -> Vec<LanPortDetection> {
     let java_processes = collect_java_process_metadata();
     
-    let output = hidden_command("netstat")
-        .args(["-ano", "-p", "tcp"])
-        .output()
-        .ok()?;
+    let output = match hidden_command("netstat").args(["-ano", "-p", "tcp"]).output() {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
     if !output.status.success() {
-        return None;
+        return Vec::new();
     }
 
     let content = String::from_utf8_lossy(&output.stdout);
@@ -485,6 +520,25 @@ fn detect_lan_port_from_system_listeners() -> Option<LanPortDetection> {
 
         if let Some(meta) = java_processes.get(&pid) {
             let mut priority = 0;
+            let cmd = meta.command_line.to_lowercase();
+            
+            // 0. Base check: is it even likely to be Minecraft?
+            let is_mc_related = cmd.contains("minecraft") 
+                || cmd.contains(".minecraft")
+                || cmd.contains("fabric-loader") 
+                || cmd.contains("forge") 
+                || cmd.contains("quilt") 
+                || cmd.contains("net.minecraft")
+                || cmd.contains("server.jar")
+                || cmd.contains("papermc")
+                || cmd.contains("spigot")
+                || cmd.contains("javaw"); // ИСПРАВЛЕНИЕ: javaw как маркер клиента
+
+            if !is_mc_related {
+                priority -= 500;
+            } else {
+                priority += 50; 
+            }
             
             // 1. If it's the standard port 25565
             if port == 25565 {
@@ -494,41 +548,51 @@ fn detect_lan_port_from_system_listeners() -> Option<LanPortDetection> {
             // 2. If it's the port defined in server.properties
             if let Some(target) = meta.server_port {
                 if port == target {
-                    priority += 200;
+                    priority += 250;
                 }
             }
             
-            // 3. If command line suggests it's a server
-            let cmd = meta.command_line.to_lowercase();
-            if cmd.contains("-jar server.jar") || cmd.contains("purpur") || cmd.contains("paper") || cmd.contains("spigot") {
-                priority += 50;
+            // 3. Specific server jar checks
+            if cmd.contains("purpur") || cmd.contains("paper") || cmd.contains("spigot") || cmd.contains("velocity") || cmd.contains("waterfall") {
+                priority += 100;
+            }
+
+            // 4. Client-side "Open to LAN" detection
+            if cmd.contains("minecraft.applet") || cmd.contains("net.minecraft.client.main.main") || cmd.contains("javaw") {
+                priority += 80;
+                if port > 49151 {
+                    priority += 70; // LAN миры обычно на высоких портах
+                }
             }
             
-            // 4. If it's a world open to LAN (usually large dynamic ports)
             if port > 49151 {
-                priority += 10;
+                priority += 5;
             }
 
             candidates.push((priority, port, pid, local.to_string()));
         }
     }
 
-    // Sort by priority landing (highest first)
     candidates.sort_by(|a, b| b.0.cmp(&a.0));
 
-    let picked = candidates.first()?;
+    candidates.into_iter().map(|(prio, port, pid, local)| {
+        LanPortDetection {
+            port,
+            source_path: "system:netstat+ps".into(),
+            source_line: format!("netstat LISTENING {} pid {} (priority {})", local, pid, prio),
+        }
+    }).collect()
+}
 
-    Some(LanPortDetection {
-        port: picked.1,
-        source_path: "system:netstat+ps".into(),
-        source_line: format!("netstat LISTENING {} pid {} (priority {})", picked.3, picked.2, picked.0),
-    })
+fn detect_lan_port_from_system_listeners() -> Option<LanPortDetection> {
+    detect_lan_ports_from_system_listeners().into_iter().next()
 }
 
 fn collect_java_process_metadata() -> HashMap<u32, JavaProcessMetadata> {
     let mut map = HashMap::new();
     
-    let ps_script = "Get-CimInstance Win32_Process -Filter \"name = 'java.exe'\" | Select-Object ProcessId, CommandLine, WorkingDirectory | ConvertTo-Json";
+    // ИСПРАВЛЕНИЕ: Добавлен javaw.exe, через который запускаются клиентские миры.
+    let ps_script = "Get-CimInstance Win32_Process -Filter \"name = 'java.exe' OR name = 'javaw.exe'\" | Select-Object ProcessId, CommandLine, WorkingDirectory | ConvertTo-Json";
     let output = hidden_command("powershell")
         .args(["-Command", ps_script])
         .output();
@@ -719,6 +783,14 @@ fn collect_nickname_sources() -> Vec<PathBuf> {
     if let Ok(candidates) = collect_log_candidates() {
         files.extend(candidates.into_iter().take(64));
     }
+
+    // ИСПРАВЛЕНИЕ: Сортируем источники ника по дате изменения файла (самые свежие первыми)
+    files.retain(|p| p.is_file());
+    files.sort_by(|a, b| {
+        file_modified(b).cmp(&file_modified(a))
+    });
+    files.dedup();
+
     files
 }
 

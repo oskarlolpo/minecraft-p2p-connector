@@ -261,6 +261,21 @@
               </div>
               <div id="logs" class="log-list"></div>
             </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2 data-i18n="settingsIgnoredPortsTitle">Игнорируемые порты</h2>
+                </div>
+                <div class="hero-actions compact">
+                  <button id="clear-ignored-ports" class="ghost-button danger-button" type="button" data-i18n="clearIgnoredButton">Очистить список</button>
+                </div>
+              </div>
+              <p class="panel-copy" data-i18n="settingsIgnoredNote">Эти порты будут пропускаться при автопоиске.</p>
+              <div id="ignored-ports-list" class="tag-list">
+                <div class="empty-state">Список пуст</div>
+              </div>
+            </section>
           </div>
         </section>
       </main>
@@ -339,6 +354,27 @@
         <div class="modal-actions">
           <button id="close-modal-secondary" class="ghost-button" type="button" data-i18n="cancelButton">Отмена</button>
           <button id="host-button" class="primary-button" type="button" data-i18n="modalHostButton">Запустить хост</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="port-choice-modal" class="modal-shell hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-modal-port="true"></div>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="port-modal-title">
+        <div class="panel-head">
+          <div>
+            <span class="eyebrow" data-i18n="portModalLabel">ОБНАРУЖЕНО НЕСКОЛЬКО МИРОВ</span>
+            <h2 id="port-modal-title" data-i18n="portModalTitle">Какой порт использовать?</h2>
+          </div>
+          <button id="close-port-modal" class="icon-button" type="button" aria-label="Закрыть">×</button>
+        </div>
+
+        <div class="port-choice-list" id="detected-ports-list">
+          <!-- Сюда будут динамически добавляться порты -->
+        </div>
+
+        <div class="modal-actions">
+          <button id="close-port-modal-secondary" class="ghost-button" type="button" data-i18n="cancelButton">Отмена</button>
         </div>
       </div>
     </div>
