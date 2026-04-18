@@ -18,7 +18,6 @@
 
 use std::{
     collections::HashMap,
-    net::{IpAddr, SocketAddr},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -36,10 +35,7 @@ use tokio::{
     task::JoinHandle,
     time::timeout,
 };
-use tokio_tungstenite::{
-    client_async_tls_with_config, connect_async,
-    tungstenite::{client::IntoClientRequest, Error as WsError, Message},
-};
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tokio_util::sync::CancellationToken;
 
 use super::proxy;
@@ -111,106 +107,6 @@ impl WssRelayConfig {
             session_id,
         }
     }
-}
-
-fn is_dns_error(error: &WsError) -> bool {
-    match error {
-        WsError::Io(io) => {
-            // Windows: 11001 = "host not found".
-            matches!(io.raw_os_error(), Some(11001)) || io.kind() == std::io::ErrorKind::NotFound
-        }
-        _ => false,
-    }
-}
-
-async fn resolve_ip_fallback(host: &str) -> Result<Vec<IpAddr>> {
-    use std::net::{Ipv4Addr, Ipv6Addr};
-
-    use trust_dns_resolver::{
-        config::{NameServerConfig, Protocol, ResolverConfig, ResolverOpts},
-        TokioAsyncResolver,
-    };
-
-    let mut config = ResolverConfig::new();
-    for socket_addr in [
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 53),
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 53),
-        SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111)), 53),
-        SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888)), 53),
-    ] {
-        config.add_name_server(NameServerConfig {
-            socket_addr,
-            protocol: Protocol::Udp,
-            tls_dns_name: None,
-            trust_negative_responses: true,
-            bind_addr: None,
-        });
-    }
-
-    let resolver = TokioAsyncResolver::tokio(config, ResolverOpts::default());
-    let response = resolver
-        .lookup_ip(host)
-        .await
-        .with_context(|| format!("WSS relay fallback DNS failed for host {host}"))?;
-
-    let mut ips: Vec<IpAddr> = response.iter().collect();
-    // Prefer IPv4 first for better compatibility on bad networks.
-    ips.sort_by_key(|ip| matches!(ip, IpAddr::V6(_)));
-    Ok(ips)
-}
-
-async fn connect_wss_with_fallback_dns(relay_url: &str) -> Result<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>> {
-    // Try system DNS first.
-    match timeout(CONNECT_TIMEOUT, connect_async(relay_url)).await {
-        Ok(Ok((stream, _response))) => return Ok(stream),
-        Ok(Err(err)) if is_dns_error(&err) => {
-            tracing::warn!("WSS relay DNS failed via system resolver, trying fallback DNS: {err:#}");
-        }
-        Ok(Err(err)) => return Err(err).context("WSS relay connect failed"),
-        Err(_) => return Err(anyhow!("WSS relay connect timed out")),
-    }
-
-    let request = relay_url
-        .into_client_request()
-        .context("invalid WSS relay URL")?;
-    let uri = request.uri();
-    let authority = uri
-        .authority()
-        .ok_or_else(|| anyhow!("invalid WSS relay URL (missing authority)"))?;
-    let host = authority.host();
-    let port = authority
-        .port_u16()
-        .or_else(|| match uri.scheme_str() {
-            Some("wss") => Some(443),
-            Some("ws") => Some(80),
-            _ => None,
-        })
-        .ok_or_else(|| anyhow!("invalid WSS relay URL (unsupported scheme)"))?;
-
-    let ips = resolve_ip_fallback(host).await?;
-    let mut last_error: Option<anyhow::Error> = None;
-    for ip in ips {
-        let addr = SocketAddr::new(ip, port);
-        tracing::info!("WSS relay fallback dial: {host}:{port} -> {addr}");
-        let socket = match timeout(CONNECT_TIMEOUT, TcpStream::connect(addr)).await {
-            Ok(Ok(sock)) => sock,
-            Ok(Err(err)) => {
-                last_error = Some(anyhow!(err).context(format!("tcp connect failed to {addr}")));
-                continue;
-            }
-            Err(_) => {
-                last_error = Some(anyhow!("tcp connect timed out to {addr}"));
-                continue;
-            }
-        };
-
-        let (ws, _) = client_async_tls_with_config(request.clone(), socket, None, None)
-            .await
-            .context("WSS relay TLS/WebSocket handshake failed")?;
-        return Ok(ws);
-    }
-
-    Err(last_error.unwrap_or_else(|| anyhow!("no IPs resolved for WSS relay host {host}")))
 }
 
 impl WssRelayRuntime {
@@ -290,7 +186,10 @@ async fn host_session(
     ready_signal: &mut Option<oneshot::Sender<Result<()>>>,
 ) -> Result<()> {
     // 1. Connect to relay
-    let ws_stream = connect_wss_with_fallback_dns(&config.relay_url).await?;
+    let (ws_stream, _) = timeout(CONNECT_TIMEOUT, connect_async(&config.relay_url))
+        .await
+        .context("WSS relay connect timed out")?
+        .context("WSS relay connect failed")?;
 
     let (mut ws_write, mut ws_read) = ws_stream.split();
 
@@ -537,7 +436,10 @@ async fn client_session(
     ready_signal: &mut Option<oneshot::Sender<Result<()>>>,
 ) -> Result<()> {
     // 1. Connect to relay
-    let ws_stream = connect_wss_with_fallback_dns(&config.relay_url).await?;
+    let (ws_stream, _) = timeout(CONNECT_TIMEOUT, connect_async(&config.relay_url))
+        .await
+        .context("WSS relay connect timed out")?
+        .context("WSS relay connect failed")?;
 
     let (mut ws_write, mut ws_read) = ws_stream.split();
 

@@ -532,7 +532,7 @@ fn detect_lan_ports_from_system_listeners() -> Vec<LanPortDetection> {
                 || cmd.contains("server.jar")
                 || cmd.contains("papermc")
                 || cmd.contains("spigot")
-                || cmd.contains("javaw"); // ИСПLog Entry: javaw как маркер клиента
+                || cmd.contains("javaw"); // ИСПРАВЛЕНИЕ: javaw как маркер клиента
 
             if !is_mc_related {
                 priority -= 500;
@@ -591,7 +591,7 @@ fn detect_lan_port_from_system_listeners() -> Option<LanPortDetection> {
 fn collect_java_process_metadata() -> HashMap<u32, JavaProcessMetadata> {
     let mut map = HashMap::new();
     
-    // ИСПLog Entry: Добавлен javaw.exe, через который запускаются клиентские миры.
+    // ИСПРАВЛЕНИЕ: Добавлен javaw.exe, через который запускаются клиентские миры.
     let ps_script = "Get-CimInstance Win32_Process -Filter \"name = 'java.exe' OR name = 'javaw.exe'\" | Select-Object ProcessId, CommandLine, WorkingDirectory | ConvertTo-Json";
     let output = hidden_command("powershell")
         .args(["-Command", ps_script])
@@ -784,7 +784,7 @@ fn collect_nickname_sources() -> Vec<PathBuf> {
         files.extend(candidates.into_iter().take(64));
     }
 
-    // ИСПLog Entry: Сортируем источники ника по дате изменения файла (самые свежие первыми)
+    // ИСПРАВЛЕНИЕ: Сортируем источники ника по дате изменения файла (самые свежие первыми)
     files.retain(|p| p.is_file());
     files.sort_by(|a, b| {
         file_modified(b).cmp(&file_modified(a))
