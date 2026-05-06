@@ -1210,10 +1210,12 @@ function updatePingGraph(peerId) {
   const padding = 10;
   const step = (w - padding * 2) / (history.length - 1);
 
-  // Gradient
+  // Gradient — read accent from CSS variable
+  const accentHex = getComputedStyle(document.body).getPropertyValue("--accent").trim();
+  const _r = parseInt(accentHex.slice(1,3),16), _g = parseInt(accentHex.slice(3,5),16), _b = parseInt(accentHex.slice(5,7),16);
   const grad = ctx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, "rgba(20, 110, 245, 0.4)");
-  grad.addColorStop(1, "rgba(20, 110, 245, 0)");
+  grad.addColorStop(0, `rgba(${_r}, ${_g}, ${_b}, 0.4)`);
+  grad.addColorStop(1, `rgba(${_r}, ${_g}, ${_b}, 0)`);
 
   ctx.beginPath();
   ctx.moveTo(padding, h);
@@ -1249,7 +1251,7 @@ function updatePingGraph(peerId) {
       ctx.bezierCurveTo(cpX, prevY, cpX, y, x, y);
     }
   }
-  ctx.strokeStyle = "var(--accent)";
+  ctx.strokeStyle = accentHex;
   ctx.lineWidth = 2;
   ctx.stroke();
 }
