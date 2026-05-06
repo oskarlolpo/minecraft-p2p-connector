@@ -531,13 +531,17 @@ fn detect_lan_ports_from_system_listeners() -> Vec<LanPortDetection> {
                 || cmd.contains("net.minecraft")
                 || cmd.contains("server.jar")
                 || cmd.contains("papermc")
-                || cmd.contains("spigot")
-                || cmd.contains("javaw"); // ИСПРАВЛЕНИЕ: javaw как маркер клиента
+                || cmd.contains("spigot");
 
-            if !is_mc_related {
+            let is_javaw = cmd.contains("javaw");
+
+            if !is_mc_related && !is_javaw {
                 priority -= 500;
+            } else if is_mc_related {
+                priority += 150; 
             } else {
-                priority += 50; 
+                // Just javaw without MC markers. Could be anything (like IntelliJ). Give a minor base score.
+                priority += 10; 
             }
             
             // 1. If it's the standard port 25565
@@ -558,10 +562,15 @@ fn detect_lan_ports_from_system_listeners() -> Vec<LanPortDetection> {
             }
 
             // 4. Client-side "Open to LAN" detection
-            if cmd.contains("minecraft.applet") || cmd.contains("net.minecraft.client.main.main") || cmd.contains("javaw") {
+            if is_mc_related && (cmd.contains("minecraft.applet") || cmd.contains("net.minecraft.client.main.main")) {
                 priority += 80;
                 if port > 49151 {
                     priority += 70; // LAN миры обычно на высоких портах
+                }
+            } else if is_javaw && !is_mc_related {
+                // If it's only javaw, high port might indicate a LAN world, but we give it a much smaller boost
+                if port > 49151 {
+                    priority += 20; 
                 }
             }
             

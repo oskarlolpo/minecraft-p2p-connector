@@ -1,4 +1,4 @@
-﻿use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use quinn::{Connection, Endpoint, EndpointConfig, VarInt};
@@ -1238,108 +1238,114 @@ impl NetworkManager {
         let task_cancel = cancel.clone();
 
         let task = tokio::spawn(async move {
-            manager
-                .push_log(format!(
-                    "Starting e4mc public fallback for local Minecraft 127.0.0.1:{local_game_port}."
-                ))
-                .await;
+            loop {
+                if task_cancel.is_cancelled() { break; }
+                manager
+                    .push_log(format!(
+                        "Starting e4mc public fallback for local Minecraft 127.0.0.1:{local_game_port}."
+                    ))
+                    .await;
 
-            match e4mc::start_host_runtime(config, local_game_port, task_cancel.clone()).await {
-                Ok(runtime) => {
-                    let domain = runtime.domain.clone();
-                    manager
-                        .mutate_status(|status| {
-                            status.e4mc_domain = Some(domain.clone());
-                            status.e4mc_verified = false;
-                            if status.transport_path.is_none() {
-                                status.transport_path = Some("e4mc-public".into());
+                match e4mc::start_host_runtime(config.clone(), local_game_port, task_cancel.clone()).await {
+                    Ok(runtime) => {
+                        let domain = runtime.domain.clone();
+                        manager
+                            .mutate_status(|status| {
+                                status.e4mc_domain = Some(domain.clone());
+                                status.e4mc_verified = false;
+                                if status.transport_path.is_none() {
+                                    status.transport_path = Some("e4mc-public".into());
+                                }
+                                status.note = Some(format!(
+                                    "Host is active. Direct transport remains primary, e4mc assigned {domain} and is being verified."
+                                ));
+                            })
+                            .await;
+                        manager
+                            .push_log(format!("e4mc public domain assigned: {domain}"))
+                            .await;
+
+                        let verification = manager
+                            .verify_e4mc_public_domain(&domain, local_game_port, task_cancel.clone())
+                            .await;
+
+                        match verification {
+                            Ok(probe) => {
+                                manager
+                                    .mutate_status(|status| {
+                                        status.e4mc_domain = Some(domain.clone());
+                                        status.e4mc_verified = true;
+                                        status.public_join_address = Some(domain.clone());
+                                        if status.transport_path.is_none() {
+                                            status.transport_path = Some("e4mc-public".into());
+                                        }
+                                        status.note = Some(format!(
+                                            "Host is active. Direct transport remains primary, verified e4mc fallback is ready at {domain}."
+                                        ));
+                                    })
+                                    .await;
+                                manager
+                                    .push_log(format!(
+                                        "e4mc public domain verified: {domain} -> Minecraft {} ({}/{})",
+                                        probe
+                                            .version
+                                            .clone()
+                                            .unwrap_or_else(|| "unknown".into()),
+                                        probe.online_players,
+                                        probe.max_players
+                                    ))
+                                    .await;
+                                let _ = app.emit(
+                                    "e4mc_domain_ready",
+                                    serde_json::json!({ "domain": domain, "verified": true }),
+                                );
                             }
-                            status.note = Some(format!(
-                                "Host is active. Direct transport remains primary, e4mc assigned {domain} and is being verified."
-                            ));
-                        })
-                        .await;
-                    manager
-                        .push_log(format!("e4mc public domain assigned: {domain}"))
-                        .await;
-
-                    let verification = manager
-                        .verify_e4mc_public_domain(&domain, local_game_port, task_cancel.clone())
-                        .await;
-
-                    match verification {
-                        Ok(probe) => {
-                            manager
-                                .mutate_status(|status| {
-                                    status.e4mc_domain = Some(domain.clone());
-                                    status.e4mc_verified = true;
-                                    status.public_join_address = Some(domain.clone());
-                                    if status.transport_path.is_none() {
-                                        status.transport_path = Some("e4mc-public".into());
-                                    }
-                                    status.note = Some(format!(
-                                        "Host is active. Direct transport remains primary, verified e4mc fallback is ready at {domain}."
-                                    ));
-                                })
-                                .await;
-                            manager
-                                .push_log(format!(
-                                    "e4mc public domain verified: {domain} -> Minecraft {} ({}/{})",
-                                    probe
-                                        .version
-                                        .clone()
-                                        .unwrap_or_else(|| "unknown".into()),
-                                    probe.online_players,
-                                    probe.max_players
-                                ))
-                                .await;
-                            let _ = app.emit(
-                                "e4mc_domain_ready",
-                                serde_json::json!({ "domain": domain, "verified": true }),
-                            );
+                            Err(error) => {
+                                manager
+                                    .mutate_status(|status| {
+                                        status.e4mc_domain = Some(domain.clone());
+                                        status.e4mc_verified = false;
+                                        status.public_join_address = None;
+                                        status.note = Some(format!(
+                                            "Host is active, but e4mc domain {domain} failed verification. Direct transport remains available."
+                                        ));
+                                    })
+                                    .await;
+                                manager
+                                    .push_log(format!(
+                                        "e4mc verification failed for {domain}; public link disabled: {error:#}"
+                                    ))
+                                    .await;
+                                let _ = app.emit(
+                                    "e4mc_domain_ready",
+                                    serde_json::json!({
+                                        "domain": domain,
+                                        "verified": false,
+                                        "error": format!("{error:#}")
+                                    }),
+                                );
+                            }
                         }
-                        Err(error) => {
-                            manager
-                                .mutate_status(|status| {
-                                    status.e4mc_domain = Some(domain.clone());
-                                    status.e4mc_verified = false;
-                                    status.public_join_address = None;
-                                    status.note = Some(format!(
-                                        "Host is active, but e4mc domain {domain} failed verification. Direct transport remains available."
-                                    ));
-                                })
-                                .await;
-                            manager
-                                .push_log(format!(
-                                    "e4mc verification failed for {domain}; public link disabled: {error:#}"
-                                ))
-                                .await;
-                            let _ = app.emit(
-                                "e4mc_domain_ready",
-                                serde_json::json!({
-                                    "domain": domain,
-                                    "verified": false,
-                                    "error": format!("{error:#}")
-                                }),
-                            );
+
+                        if let Err(error) = runtime.wait().await {
+                            if !task_cancel.is_cancelled() {
+                                manager
+                                    .push_log(format!("e4mc session terminated: {error:#}. Restarting in 5s..."))
+                                    .await;
+                            }
                         }
                     }
-
-                    if let Err(error) = runtime.wait().await {
+                    Err(error) => {
                         if !task_cancel.is_cancelled() {
                             manager
-                                .set_nonfatal(format!("e4mc session terminated: {error:#}"))
+                                .push_log(format!("e4mc fallback unavailable: {error:#}. Retrying in 10s..."))
                                 .await;
                         }
                     }
                 }
-                Err(error) => {
-                    if !task_cancel.is_cancelled() {
-                        manager
-                            .set_nonfatal(format!("e4mc fallback unavailable: {error:#}"))
-                            .await;
-                    }
-                }
+                
+                if task_cancel.is_cancelled() { break; }
+                tokio::time::sleep(Duration::from_secs(5)).await;
             }
         });
 
