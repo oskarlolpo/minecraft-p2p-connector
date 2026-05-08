@@ -68,12 +68,12 @@ const portHelpEl = document.querySelector("#port-help");
 const brandUserNameEl = document.querySelector("#brand-user-name");
 const brandAvatarImageEl = document.querySelector("#brand-avatar-image");
 const brandAvatarFallbackEl = document.querySelector("#brand-avatar-fallback");
-const profileMenuTriggerEl = document.querySelector("#profile-menu-trigger");
-const profileMenuEl = document.querySelector("#profile-menu");
-const profileNicknameEl = document.querySelector("#profile-nickname");
-const profileAvatarFileEl = document.querySelector("#profile-avatar-file");
-const chooseAvatarEl = document.querySelector("#choose-avatar");
-const saveProfileEl = document.querySelector("#save-profile");
+const profileMenuTriggerEl = document.querySelector("#open-own-profile");
+const profileMenuEl = null; // old dropdown removed
+const profileNicknameEl = null;
+const profileAvatarFileEl = null;
+const chooseAvatarEl = null;
+const saveProfileEl = null;
 const settingsVersionEl = document.querySelector("#settings-version");
 const checkUpdatesEl = document.querySelector("#check-updates");
 const installUpdateEl = document.querySelector("#install-update");
@@ -571,43 +571,13 @@ async function installUpdate() {
   }
 }
 
-function toggleProfileMenu(force) {
-  ensureProfileMenuPortal();
-  const open = typeof force === "boolean" ? force : profileMenuEl.classList.contains("hidden");
-  profileMenuEl.classList.toggle("hidden", !open);
-  if (open) requestAnimationFrame(positionProfileMenu);
-}
-
-function ensureProfileMenuPortal() {
-  if (!profileMenuEl || profileMenuEl.parentElement === document.body) return;
-  document.body.appendChild(profileMenuEl);
-}
-
-function positionProfileMenu() {
-  if (profileMenuEl.classList.contains("hidden")) return;
-  const triggerRect = profileMenuTriggerEl.getBoundingClientRect();
-  const menuRect = profileMenuEl.getBoundingClientRect();
-  const margin = 12;
-  const spacing = 8;
-
-  let left = triggerRect.left;
-  let top = triggerRect.bottom + spacing;
-
-  const maxLeft = window.innerWidth - menuRect.width - margin;
-  left = Math.min(Math.max(margin, left), Math.max(margin, maxLeft));
-
-  const maxTop = window.innerHeight - menuRect.height - margin;
-  if (top > maxTop) {
-    top = triggerRect.top - menuRect.height - spacing;
-  }
-  top = Math.min(Math.max(margin, top), Math.max(margin, maxTop));
-
-  profileMenuEl.style.left = `${Math.round(left)}px`;
-  profileMenuEl.style.top = `${Math.round(top)}px`;
-}
+// Brand avatar → open own profile
+document.querySelector("#open-own-profile")?.addEventListener("click", () => {
+  openOwnProfile();
+});
 
 async function pickAvatarFile() {
-  profileAvatarFileEl.click();
+  // handled via profile modal
 }
 
 async function handleAvatarChosen() {
@@ -2881,3 +2851,420 @@ document.querySelector("#run-nat-test")?.addEventListener("click", async () => {
     addLog(`[NAT] Detection failed: ${e}`);
   }
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+//  USER SEARCH MODAL
+// ═══════════════════════════════════════════════════════════════════════
+
+const searchModal = document.querySelector("#search-users-modal");
+const searchInput = document.querySelector("#search-users-input");
+const searchResults = document.querySelector("#search-users-results");
+const searchStatus = document.querySelector("#search-users-status");
+
+function openSearchModal() {
+  if (!searchModal) return;
+  searchModal.classList.remove("hidden");
+  searchModal.setAttribute("aria-hidden", "false");
+  if (searchInput) { searchInput.value = ""; searchInput.focus(); }
+  if (searchResults) searchResults.innerHTML = "";
+  if (searchStatus) searchStatus.textContent = "";
+}
+
+function closeSearchModal() {
+  if (!searchModal) return;
+  searchModal.classList.add("hidden");
+  searchModal.setAttribute("aria-hidden", "true");
+}
+
+document.querySelector("#add-friend-btn")?.addEventListener("click", openSearchModal);
+document.querySelector("#close-search-modal")?.addEventListener("click", closeSearchModal);
+searchModal?.addEventListener("click", (e) => {
+  if (e.target?.dataset?.closeSearch === "true") closeSearchModal();
+});
+
+let searchDebounce = null;
+searchInput?.addEventListener("input", () => {
+  clearTimeout(searchDebounce);
+  const q = searchInput.value.trim();
+  if (q.length < 2) {
+    if (searchResults) searchResults.innerHTML = `<div class="empty-state">Введите минимум 2 символа</div>`;
+    return;
+  }
+  if (searchStatus) searchStatus.textContent = "…";
+  searchDebounce = setTimeout(() => runUserSearch(q), 350);
+});
+
+async function runUserSearch(q) {
+  if (!friendsState.serverUrl) {
+    if (searchResults) searchResults.innerHTML = `<div class="empty-state">Сначала укажите URL сервера в Настройках</div>`;
+    return;
+  }
+  try {
+    const res = await fetch(friendsApiUrl(`/api/users/search?q=${encodeURIComponent(q)}`), {
+      headers: friendsHeaders(),
+    });
+    const data = await res.json();
+    if (searchStatus) searchStatus.textContent = "";
+    renderSearchResults(data.users || []);
+  } catch (e) {
+    if (searchStatus) searchStatus.textContent = "Ошибка";
+    if (searchResults) searchResults.innerHTML = `<div class="empty-state">Ошибка подключения к серверу</div>`;
+  }
+}
+
+function renderSearchResults(users) {
+  if (!searchResults) return;
+  if (!users.length) {
+    searchResults.innerHTML = `<div class="empty-state">Никого не найдено</div>`;
+    return;
+  }
+
+  searchResults.innerHTML = users.map((u) => {
+    const fr = u.friendship;
+    let actionBtn = "";
+    if (!fr) {
+      actionBtn = `<button class="primary-button compact" onclick="addFriendFromSearch('${escapeHtml(u.id)}')" type="button">Добавить</button>`;
+    } else if (fr.status === "pending") {
+      actionBtn = `<button class="ghost-button compact" disabled type="button">Заявка отправлена</button>`;
+    } else if (fr.status === "accepted") {
+      actionBtn = `<button class="ghost-button compact" disabled type="button">✓ Друзья</button>`;
+    }
+
+    return `
+      <div class="friend-card" style="cursor:pointer" onclick="openUserProfile('${escapeHtml(u.id)}')">
+        ${renderAvatarEl(u, 38)}
+        <div class="friend-info">
+          <strong>${escapeHtml(u.nickname)}</strong>
+          ${u.bio ? `<span class="friend-code-small">${escapeHtml(u.bio.slice(0, 40))}</span>` : ""}
+        </div>
+        <div class="friend-actions" onclick="event.stopPropagation()">
+          ${actionBtn}
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+window.addFriendFromSearch = async function(userId) {
+  try {
+    const res = await fetch(friendsApiUrl("/api/friends/add"), {
+      method: "POST",
+      headers: friendsHeaders(),
+      body: JSON.stringify({ userId }),
+    });
+    const data = await res.json();
+    if (!res.ok) { addLog(`[Friends] ${data.error}`); return; }
+    addLog("Заявка в друзья отправлена!");
+    // re-run search to refresh states
+    const q = searchInput?.value?.trim();
+    if (q?.length >= 2) runUserSearch(q);
+  } catch (e) {
+    addLog(`[Friends] Error: ${e.message}`);
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════
+//  PROFILE MODAL
+// ═══════════════════════════════════════════════════════════════════════
+
+const profileModal = document.querySelector("#profile-modal");
+const profileModalAvatar = document.querySelector("#profile-modal-avatar");
+const profileModalTitle = document.querySelector("#profile-modal-title");
+const profileModalMcNick = document.querySelector("#profile-modal-mc-nick");
+const profileModalBio = document.querySelector("#profile-modal-bio");
+const profileModalActions = document.querySelector("#profile-modal-actions");
+const profileStatFriends = document.querySelector("#profile-stat-friends");
+const profileStatFollowers = document.querySelector("#profile-stat-followers");
+const profileStatFollowing = document.querySelector("#profile-stat-following");
+const profileEditSection = document.querySelector("#profile-edit-section");
+const profileFriendsGrid = document.querySelector("#profile-friends-grid");
+const profileUploadBtn = document.querySelector("#profile-upload-avatar");
+const avatarFileInput = document.querySelector("#avatar-file-input");
+
+let profileModalCurrentId = null;
+
+function closeProfileModal() {
+  if (!profileModal) return;
+  profileModal.classList.add("hidden");
+  profileModal.setAttribute("aria-hidden", "true");
+  profileModalCurrentId = null;
+}
+
+document.querySelector("#close-profile-modal")?.addEventListener("click", closeProfileModal);
+profileModal?.addEventListener("click", (e) => {
+  if (e.target?.dataset?.closeProfile === "true") closeProfileModal();
+});
+
+async function openOwnProfile() {
+  if (!friendsState.serverUrl || !friendsState.user) {
+    // Fallback: open profile without server
+    showProfileModal({
+      id: null,
+      nickname: friendsState.user?.nickname || "Player",
+      bio: friendsState.user?.bio || "",
+      avatar_url: friendsState.user?.avatar_url || null,
+      minecraft_nickname: friendsState.user?.minecraft_nickname || "",
+      friends: 0, followers: 0, following: 0,
+    }, true);
+    return;
+  }
+  try {
+    const res = await fetch(friendsApiUrl("/api/me"), { headers: friendsHeaders() });
+    const data = await res.json();
+    showProfileModal(data, true);
+  } catch (e) {
+    addLog(`[Profile] Failed to load: ${e.message}`);
+  }
+}
+
+window.openUserProfile = async function(userId) {
+  if (!friendsState.serverUrl) return;
+  try {
+    const res = await fetch(friendsApiUrl(`/api/users/${userId}`), { headers: friendsHeaders() });
+    const data = await res.json();
+    if (!res.ok) { addLog(`[Profile] ${data.error}`); return; }
+    showProfileModal(data, false);
+  } catch (e) {
+    addLog(`[Profile] Error: ${e.message}`);
+  }
+};
+
+function showProfileModal(user, isOwn) {
+  if (!profileModal) return;
+  profileModalCurrentId = user.id;
+
+  // Avatar
+  setAvatarEl(profileModalAvatar, user, 72);
+
+  // Info
+  if (profileModalTitle) profileModalTitle.textContent = user.nickname || "Player";
+  if (profileModalMcNick) {
+    profileModalMcNick.textContent = user.minecraft_nickname ? `Minecraft: ${user.minecraft_nickname}` : "";
+  }
+  if (profileModalBio) profileModalBio.textContent = user.bio || "";
+
+  // Stats
+  if (profileStatFriends) profileStatFriends.textContent = user.friends ?? 0;
+  if (profileStatFollowers) profileStatFollowers.textContent = user.followers ?? 0;
+  if (profileStatFollowing) profileStatFollowing.textContent = user.following ?? 0;
+
+  // Actions
+  if (profileModalActions) {
+    if (isOwn) {
+      profileModalActions.innerHTML = `
+        <button class="ghost-button compact" type="button" onclick="toggleProfileEdit()">✏ Редактировать</button>
+      `;
+      // Show upload btn
+      profileUploadBtn?.classList.remove("hidden");
+    } else {
+      const fr = user.friendship;
+      let friendBtn = "";
+      if (!fr) {
+        friendBtn = `<button class="primary-button compact" type="button" onclick="addFriendFromSearch('${escapeHtml(user.id)}')">+ Друзья</button>`;
+      } else if (fr.status === "pending") {
+        friendBtn = `<button class="ghost-button compact" disabled>Заявка отправлена</button>`;
+      } else if (fr.status === "accepted") {
+        friendBtn = `<button class="ghost-button compact" disabled>✓ Друзья</button>`;
+      }
+
+      const followBtn = user.isFollowing
+        ? `<button class="ghost-button compact" type="button" onclick="toggleFollow('${escapeHtml(user.id)}', true)">Отписаться</button>`
+        : `<button class="ghost-button compact" type="button" onclick="toggleFollow('${escapeHtml(user.id)}', false)">Подписаться</button>`;
+
+      profileModalActions.innerHTML = friendBtn + followBtn;
+      profileUploadBtn?.classList.add("hidden");
+    }
+  }
+
+  // Edit form
+  if (profileEditSection) {
+    profileEditSection.classList.add("hidden");
+    if (isOwn) {
+      const nickInput = document.querySelector("#profile-edit-nick");
+      const mcInput = document.querySelector("#profile-edit-mc");
+      const bioInput = document.querySelector("#profile-edit-bio");
+      if (nickInput) nickInput.value = user.nickname || "";
+      if (mcInput) mcInput.value = user.minecraft_nickname || "";
+      if (bioInput) bioInput.value = user.bio || "";
+    }
+  }
+
+  // Friends mini-grid
+  if (profileFriendsGrid) {
+    const friends = Array.isArray(user.friends) ? user.friends : [];
+    if (!friends.length) {
+      profileFriendsGrid.innerHTML = `<span class="friend-code-small">Нет друзей</span>`;
+    } else {
+      profileFriendsGrid.innerHTML = friends.map((f) => `
+        <div class="profile-mini-avatar" onclick="openUserProfile('${escapeHtml(f.id)}')" title="${escapeHtml(f.nickname)}">
+          ${f.avatar_url
+            ? `<img src="${escapeHtml(f.avatar_url)}" alt="${escapeHtml(f.nickname)}" />`
+            : escapeHtml((f.nickname || "?")[0].toUpperCase())}
+        </div>
+      `).join("");
+    }
+  }
+
+  profileModal.classList.remove("hidden");
+  profileModal.setAttribute("aria-hidden", "false");
+}
+
+window.toggleProfileEdit = function() {
+  if (!profileEditSection) return;
+  profileEditSection.classList.toggle("hidden");
+};
+
+document.querySelector("#profile-save-btn")?.addEventListener("click", async () => {
+  const nick = document.querySelector("#profile-edit-nick")?.value?.trim();
+  const mc = document.querySelector("#profile-edit-mc")?.value?.trim();
+  const bio = document.querySelector("#profile-edit-bio")?.value?.trim();
+  if (!nick) return;
+
+  try {
+    const res = await fetch(friendsApiUrl("/api/me"), {
+      method: "PATCH",
+      headers: friendsHeaders(),
+      body: JSON.stringify({ nickname: nick, minecraftNickname: mc, bio }),
+    });
+    const data = await res.json();
+    friendsState.user = data;
+    // Update sidebar
+    if (brandUserNameEl) brandUserNameEl.textContent = data.nickname;
+    // Refresh avatar in sidebar
+    updateSidebarAvatar(data);
+    // Refresh profile modal
+    showProfileModal(data, true);
+    profileEditSection?.classList.add("hidden");
+    addLog("Профиль обновлён");
+  } catch (e) {
+    addLog(`[Profile] Save error: ${e.message}`);
+  }
+});
+
+document.querySelector("#profile-cancel-edit")?.addEventListener("click", () => {
+  profileEditSection?.classList.add("hidden");
+});
+
+// Avatar upload
+profileUploadBtn?.addEventListener("click", () => avatarFileInput?.click());
+avatarFileInput?.addEventListener("change", async () => {
+  const file = avatarFileInput?.files?.[0];
+  if (!file || !friendsState.serverUrl) return;
+
+  const formData = new FormData();
+  formData.append("avatar", file);
+
+  try {
+    const res = await fetch(friendsApiUrl("/api/me/avatar"), {
+      method: "POST",
+      headers: { "X-Device-Id": friendsState.deviceId },
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) { addLog(`[Avatar] ${data.error}`); return; }
+
+    if (friendsState.user) friendsState.user.avatar_url = data.avatarUrl;
+    updateSidebarAvatar(friendsState.user);
+    // Refresh profile modal avatar
+    setAvatarEl(profileModalAvatar, friendsState.user, 72);
+    addLog("Аватарка обновлена!");
+  } catch (e) {
+    addLog(`[Avatar] Upload error: ${e.message}`);
+  }
+});
+
+function updateSidebarAvatar(user) {
+  if (!user) return;
+  if (brandUserNameEl) brandUserNameEl.textContent = user.nickname || "Player";
+  if (brandAvatarFallbackEl) brandAvatarFallbackEl.textContent = (user.nickname || "P")[0].toUpperCase();
+  if (brandAvatarImageEl) {
+    if (user.avatar_url) {
+      brandAvatarImageEl.src = user.avatar_url;
+      brandAvatarImageEl.classList.remove("hidden");
+      brandAvatarFallbackEl?.classList?.add("hidden");
+    } else {
+      brandAvatarImageEl.classList.add("hidden");
+      brandAvatarFallbackEl?.classList?.remove("hidden");
+    }
+  }
+}
+
+// ── Avatar helper ────────────────────────────────────────────────────────
+function renderAvatarEl(user, size = 38) {
+  const cls = `friend-avatar`;
+  if (user.avatar_url) {
+    return `<div class="${cls}" style="width:${size}px;height:${size}px;padding:0;overflow:hidden"><img src="${escapeHtml(user.avatar_url)}" alt="${escapeHtml(user.nickname)}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit"/></div>`;
+  }
+  return `<div class="${cls}" style="width:${size}px;height:${size}px">${escapeHtml((user.nickname || "?")[0].toUpperCase())}</div>`;
+}
+
+function setAvatarEl(el, user, size) {
+  if (!el) return;
+  el.innerHTML = "";
+  if (user?.avatar_url) {
+    const img = document.createElement("img");
+    img.src = user.avatar_url;
+    img.alt = user.nickname || "";
+    img.style.cssText = "width:100%;height:100%;object-fit:cover";
+    el.appendChild(img);
+  } else {
+    el.textContent = (user?.nickname || "?")[0].toUpperCase();
+  }
+}
+
+window.toggleFollow = async function(userId, isFollowing) {
+  try {
+    const method = isFollowing ? "DELETE" : "POST";
+    await fetch(friendsApiUrl(`/api/users/${userId}/follow`), {
+      method,
+      headers: friendsHeaders(),
+    });
+    // Refresh profile
+    openUserProfile(userId);
+  } catch (e) {
+    addLog(`[Follow] Error: ${e.message}`);
+  }
+};
+
+// Update renderFriendCard to use avatars and open profiles
+function renderFriendCard(f, showPresence) {
+  const isOnline = f.online;
+  const isHosting = f.hosting;
+  const statusClass = isHosting ? "status-hosting" : isOnline ? "status-online" : "status-offline";
+  const statusText = isHosting ? "Хостит" : isOnline ? "Онлайн" : "Оффлайн";
+
+  return `
+    <div class="friend-card" style="cursor:pointer" onclick="openUserProfile('${escapeHtml(f.id)}')">
+      ${renderAvatarEl(f, 38)}
+      <div class="friend-info">
+        <strong>${escapeHtml(f.nickname)}</strong>
+        ${showPresence
+          ? `<span class="friend-status ${statusClass}">${escapeHtml(statusText)}</span>`
+          : `<span class="friend-code-small">${escapeHtml(f.friend_code || "")}</span>`}
+      </div>
+      <div class="friend-actions" onclick="event.stopPropagation()">
+        <button class="ghost-button compact danger-button" onclick="removeFriend('${escapeHtml(f.friendship_id)}')" title="Удалить">✕</button>
+      </div>
+    </div>
+  `;
+}
+
+// Update renderFriendsList to update badge counts
+const _origRenderFriendsList = renderFriendsList;
+// patch counts into the existing renderFriendsList
+function renderFriendsListWithCounts() {
+  renderFriendsList();
+  const accepted = friendsState.friends.filter(f => f.status === "accepted");
+  const online = accepted.filter(f => f.online);
+  const reqCount = friendsState.pendingRequests.length;
+  const onlineCountEl = document.querySelector("#friends-online-count");
+  const allCountEl = document.querySelector("#friends-all-count");
+  const reqCountEl = document.querySelector("#friends-req-count");
+  if (onlineCountEl) onlineCountEl.textContent = online.length;
+  if (allCountEl) allCountEl.textContent = accepted.length;
+  if (reqCountEl) {
+    reqCountEl.textContent = reqCount;
+    reqCountEl.style.display = reqCount ? "" : "none";
+  }
+}
+

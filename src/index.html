@@ -10,28 +10,13 @@
     <div class="app-shell">
       <aside class="sidebar">
         <div class="sidebar-brand-block">
-          <button id="profile-menu-trigger" class="brand-mark avatar-trigger" type="button" aria-label="Open profile">
+          <button id="open-own-profile" class="brand-mark avatar-trigger" type="button" aria-label="Открыть профиль">
             <img id="brand-avatar-image" class="hidden" alt="" />
             <span id="brand-avatar-fallback">P</span>
           </button>
           <div class="brand-copy">
             <span class="brand-label">Minecraft P2P Connector</span>
             <strong id="brand-user-name">Player</strong>
-          </div>
-          <div id="profile-menu" class="profile-menu hidden">
-            <div class="profile-menu-head">
-              <strong data-i18n="profileMenuTitle">Профиль</strong>
-            </div>
-            <label class="field compact-field">
-              <span data-i18n="profileNicknameLabel">Ник в приложении</span>
-              <input id="profile-nickname" type="text" maxlength="32" placeholder="Player" data-i18n-placeholder="profileNicknamePlaceholder" />
-            </label>
-            <div class="avatar-picker-row">
-              <span data-i18n="profileAvatarLabel">Аватарка</span>
-              <button id="choose-avatar" class="ghost-button" type="button" data-i18n="profileChooseAvatar">Выбрать файл</button>
-            </div>
-            <input id="profile-avatar-file" class="visually-hidden" type="file" accept="image/*" />
-            <button id="save-profile" class="primary-button profile-save-button" type="button" data-i18n="profileSaveButton">Сохранить</button>
           </div>
         </div>
 
@@ -195,11 +180,10 @@
               <p class="hero-subtitle" data-i18n="friendsSubtitle">Играйте вместе без лишних настроек</p>
             </div>
             <div class="hero-right">
-              <div class="friend-code-display">
-                <span class="eyebrow" data-i18n="friendsYourCode">Ваш код</span>
-                <strong id="my-friend-code" class="friend-code-value">----</strong>
-                <button id="copy-friend-code" class="ghost-button compact" type="button" data-i18n="copyButton">Копировать</button>
-              </div>
+              <button id="add-friend-btn" class="primary-button" type="button">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <span data-i18n="friendsSearchButton">Найти игроков</span>
+              </button>
             </div>
           </header>
 
@@ -207,28 +191,24 @@
             <div class="stack-column">
               <section class="panel">
                 <div class="panel-head">
-                  <div>
-                    <h2 data-i18n="friendsOnline">Онлайн друзья</h2>
-                  </div>
-                  <button id="add-friend-btn" class="primary-button compact" type="button" data-i18n="friendsAddButton">+ Добавить</button>
+                  <h2 data-i18n="friendsOnline">Онлайн</h2>
+                  <span id="friends-online-count" class="badge">0</span>
                 </div>
                 <div id="friends-online-list" class="friends-grid"></div>
               </section>
 
               <section class="panel">
                 <div class="panel-head">
-                  <div>
-                    <h2 data-i18n="friendsAll">Все друзья</h2>
-                  </div>
+                  <h2 data-i18n="friendsAll">Все друзья</h2>
+                  <span id="friends-all-count" class="badge">0</span>
                 </div>
                 <div id="friends-all-list" class="friends-grid"></div>
               </section>
 
               <section class="panel">
                 <div class="panel-head">
-                  <div>
-                    <h2 data-i18n="friendsRequests">Входящие заявки</h2>
-                  </div>
+                  <h2 data-i18n="friendsRequests">Входящие заявки</h2>
+                  <span id="friends-req-count" class="badge badge-accent">0</span>
                 </div>
                 <div id="friends-requests-list" class="friends-grid"></div>
               </section>
@@ -237,9 +217,7 @@
             <div class="stack-column side-column">
               <section class="panel">
                 <div class="panel-head">
-                  <div>
-                    <h2 data-i18n="friendsHosting">Сейчас хостят</h2>
-                  </div>
+                  <h2 data-i18n="friendsHosting">Сейчас хостят</h2>
                 </div>
                 <div id="friends-hosting-list" class="friends-grid">
                   <div class="empty-state" data-i18n="friendsNoHosting">Никто из друзей не хостит</div>
@@ -248,9 +226,7 @@
 
               <section class="panel">
                 <div class="panel-head">
-                  <div>
-                    <h2 data-i18n="natDiagTitle">NAT диагностика</h2>
-                  </div>
+                  <h2 data-i18n="natDiagTitle">NAT диагностика</h2>
                   <button id="run-nat-test" class="ghost-button compact" type="button" data-i18n="natRunButton">Проверить</button>
                 </div>
                 <div id="nat-result" class="nat-result">
@@ -264,19 +240,6 @@
                   </div>
                   <p id="nat-note" class="panel-copy"></p>
                 </div>
-              </section>
-
-              <section class="panel">
-                <div class="panel-head">
-                  <div>
-                    <h2 data-i18n="friendsServerUrl">Сервер друзей</h2>
-                  </div>
-                </div>
-                <label class="field">
-                  <span data-i18n="friendsServerLabel">URL сервера</span>
-                  <input id="friends-server-url" type="url" placeholder="https://your-vps.com:3478" value="" />
-                </label>
-                <button id="save-friends-server" class="primary-button compact" type="button" data-i18n="saveButton">Сохранить</button>
               </section>
             </div>
           </div>
@@ -361,6 +324,20 @@
                 </div>
               </div>
               <div id="update-status" class="panel-copy">—</div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2 data-i18n="friendsServerUrl">Сервер социальных функций</h2>
+                </div>
+              </div>
+              <p class="panel-copy" style="margin-bottom:0.75rem">Адрес бэкенда для системы друзей, профилей и присутствия.</p>
+              <label class="field">
+                <span data-i18n="friendsServerLabel">URL сервера</span>
+                <input id="friends-server-url" type="url" placeholder="http://2.26.54.53:3478" value="" />
+              </label>
+              <button id="save-friends-server" class="primary-button compact" type="button" data-i18n="saveButton">Сохранить</button>
             </section>
 
             <section class="panel log-panel">
@@ -545,26 +522,91 @@
       </div>
     </div>
 
-    <div id="add-friend-modal" class="modal-shell hidden" aria-hidden="true">
-      <div class="modal-backdrop" data-close-add-friend="true"></div>
-      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="add-friend-title">
+    <!-- User Search Modal -->
+    <div id="search-users-modal" class="modal-shell hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-search="true"></div>
+      <div class="modal-card modal-wide" role="dialog" aria-modal="true" aria-labelledby="search-users-title">
         <div class="panel-head">
           <div>
-            <span class="eyebrow" data-i18n="addFriendLabel">ДОБАВИТЬ ДРУГА</span>
-            <h2 id="add-friend-title" data-i18n="addFriendTitle">Введите код друга</h2>
+            <span class="eyebrow">ПОИСК ИГРОКОВ</span>
+            <h2 id="search-users-title">Найти игроков платформы</h2>
           </div>
-          <button id="close-add-friend" class="icon-button" type="button" aria-label="Закрыть">×</button>
+          <button id="close-search-modal" class="icon-button" type="button" aria-label="Закрыть">×</button>
         </div>
-        <div class="modal-grid">
+        <div class="search-input-wrap">
+          <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input id="search-users-input" type="text" placeholder="Введите ник игрока..." autocomplete="off" />
+          <span id="search-users-status" class="search-status"></span>
+        </div>
+        <div id="search-users-results" class="friends-grid search-results-grid"></div>
+      </div>
+    </div>
+
+    <!-- Profile Modal -->
+    <div id="profile-modal" class="modal-shell hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-profile="true"></div>
+      <div class="modal-card modal-profile" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title">
+        <button id="close-profile-modal" class="icon-button profile-close-btn" type="button" aria-label="Закрыть">×</button>
+
+        <!-- Profile Banner -->
+        <div class="profile-banner">
+          <div class="profile-avatar-wrap">
+            <div id="profile-modal-avatar" class="profile-big-avatar">?</div>
+            <button id="profile-upload-avatar" class="avatar-upload-btn hidden" title="Сменить аватар" type="button">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </button>
+            <input id="avatar-file-input" type="file" accept="image/*" class="hidden" />
+          </div>
+          <div class="profile-banner-info">
+            <h2 id="profile-modal-title" class="profile-name">Player</h2>
+            <span id="profile-modal-mc-nick" class="profile-mc-nick"></span>
+            <p id="profile-modal-bio" class="profile-bio"></p>
+          </div>
+          <div id="profile-modal-actions" class="profile-actions"></div>
+        </div>
+
+        <!-- Stats row -->
+        <div class="profile-stats-row">
+          <div class="profile-stat">
+            <strong id="profile-stat-friends">0</strong>
+            <span>Друзья</span>
+          </div>
+          <div class="profile-stat">
+            <strong id="profile-stat-followers">0</strong>
+            <span>Подписчики</span>
+          </div>
+          <div class="profile-stat">
+            <strong id="profile-stat-following">0</strong>
+            <span>Подписки</span>
+          </div>
+        </div>
+
+        <!-- Edit form (own profile only) -->
+        <div id="profile-edit-section" class="profile-edit hidden">
           <label class="field">
-            <span data-i18n="addFriendCodeLabel">Код друга</span>
-            <input id="add-friend-code" type="text" maxlength="9" placeholder="XXXX-XXXX" style="text-transform: uppercase; letter-spacing: 0.15em; font-family: monospace; font-size: 1.25rem;" />
+            <span>Отображаемый ник</span>
+            <input id="profile-edit-nick" type="text" maxlength="32" />
           </label>
-          <p id="add-friend-error" class="field-error hidden"></p>
+          <label class="field">
+            <span>Minecraft ник</span>
+            <input id="profile-edit-mc" type="text" maxlength="32" />
+          </label>
+          <label class="field">
+            <span>О себе</span>
+            <textarea id="profile-edit-bio" maxlength="200" rows="3"></textarea>
+          </label>
+          <div class="modal-actions">
+            <button id="profile-save-btn" class="primary-button compact" type="button">Сохранить</button>
+            <button id="profile-cancel-edit" class="ghost-button compact" type="button">Отмена</button>
+          </div>
         </div>
-        <div class="modal-actions">
-          <button id="cancel-add-friend" class="ghost-button" type="button" data-i18n="cancelButton">Отмена</button>
-          <button id="confirm-add-friend" class="primary-button" type="button" data-i18n="addFriendConfirm">Отправить заявку</button>
+
+        <!-- Friends grid on profile -->
+        <div class="profile-section">
+          <div class="profile-section-head">
+            <span>Друзья</span>
+          </div>
+          <div id="profile-friends-grid" class="profile-mini-grid"></div>
         </div>
       </div>
     </div>
