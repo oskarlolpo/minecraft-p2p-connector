@@ -1298,3 +1298,193 @@ body[data-theme="white"] .nav-button img {
   transform: scale(1.1);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--btn-color) 30%, transparent);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   FRIENDS PAGE
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.friends-layout {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 1.25rem;
+  padding: 0 1.25rem 2rem;
+}
+
+.friend-code-display {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+}
+
+.friend-code-value {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 1.5rem;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.hero-subtitle {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  margin-top: 0.25rem;
+}
+
+/* Friend cards */
+.friends-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.friend-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 10px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.friend-card:hover {
+  background: var(--card-hover);
+  border-color: color-mix(in srgb, var(--accent) 25%, var(--border));
+}
+
+.friend-hosting-card {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent) 5%, var(--card-bg));
+}
+
+.friend-request-card {
+  border-style: dashed;
+}
+
+.friend-avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 1rem;
+  color: #fff;
+  background: color-mix(in srgb, var(--accent) 50%, var(--surface));
+  flex-shrink: 0;
+  position: relative;
+}
+
+.friend-avatar::after {
+  content: "";
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--surface);
+  background: var(--text-muted);
+}
+
+.friend-avatar.status-online::after {
+  background: #22c55e;
+}
+
+.friend-avatar.status-hosting::after {
+  background: var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.friend-avatar.status-offline::after {
+  background: var(--text-muted);
+}
+
+.friend-avatar.hosting-glow {
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.friend-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.friend-info strong {
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.friend-status {
+  font-size: 0.75rem;
+}
+
+.friend-status.status-online {
+  color: #22c55e;
+}
+
+.friend-status.status-hosting {
+  color: var(--accent);
+}
+
+.friend-status.status-offline {
+  color: var(--text-muted);
+}
+
+.friend-code-small {
+  font-family: monospace;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  letter-spacing: 0.1em;
+}
+
+.host-room-name {
+  font-size: 0.8rem;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.host-meta-small {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.friend-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+/* NAT Result */
+.nat-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.nat-result .metric strong {
+  font-family: monospace;
+}
+
+/* Field error */
+.field-error {
+  color: #ef4444;
+  font-size: 0.82rem;
+  padding: 0.25rem 0;
+}
+
+/* Compact button variant */
+.compact {
+  padding: 0.35rem 0.65rem;
+  font-size: 0.8rem;
+}

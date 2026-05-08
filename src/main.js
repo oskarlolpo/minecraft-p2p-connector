@@ -59,8 +59,10 @@ const sessionModeEl = document.querySelector("#session-mode");
 const hostLockNoteEl = document.querySelector("#host-lock-note");
 const hostSectionTitleEl = document.querySelector("#host-section-title");
 const navHomeEl = document.querySelector("#nav-home");
+const navFriendsEl = document.querySelector("#nav-friends");
 const navSettingsEl = document.querySelector("#nav-settings");
 const pageHomeEl = document.querySelector("#page-home");
+const pageFriendsEl = document.querySelector("#page-friends");
 const pageSettingsEl = document.querySelector("#page-settings");
 const portHelpEl = document.querySelector("#port-help");
 const brandUserNameEl = document.querySelector("#brand-user-name");
@@ -522,9 +524,12 @@ function applyLanguage(language) {
 function setPage(page) {
   state.page = page;
   pageHomeEl.classList.toggle("page-active", page === "home");
+  pageFriendsEl?.classList.toggle("page-active", page === "friends");
   pageSettingsEl.classList.toggle("page-active", page === "settings");
   navHomeEl.classList.toggle("nav-button-active", page === "home");
+  navFriendsEl?.classList.toggle("nav-button-active", page === "friends");
   navSettingsEl.classList.toggle("nav-button-active", page === "settings");
+  if (page === "friends") initFriendsPage();
 }
 
 async function loadAppInfo() {
@@ -1066,7 +1071,8 @@ function renderSessionCard() {
           }
         </div>
         <div class="active-host-tools">
-          ${publicJavaEndpoint ? `<button class="ghost-button" type="button" data-copy-host-java="${escapeHtml(publicJavaEndpoint)}">${escapeHtml(t("copyIpButton"))}</button>` : ""}
+          ${publicJavaEndpoint ? `<button class="ghost-button" type="button" data-copy-host-java="${escapeHtml(publicJavaEndpoint)}">${escapeHtml(t("copyIpButton"))} (local)</button>` : ""}
+          ${publicJavaEndpoint ? `<button class="primary-button" type="button" data-copy-host-public="${escapeHtml(toSocketEndpoint(publicJavaEndpoint) ?? publicJavaEndpoint)}">${escapeHtml(t("copyIpButton"))} (public)</button>` : ""}
           ${hostBedrockEndpoint ? `<button class="ghost-button" type="button" data-copy-host-bedrock="${escapeHtml(hostBedrockEndpoint)}">${escapeHtml(t("copyBedrockIpButton"))}</button>` : ""}
         </div>
       </div>
@@ -2213,6 +2219,7 @@ await listen("e4mc_domain_ready", async (event) => {
 });
 
 navHomeEl.addEventListener("click", () => setPage("home"));
+navFriendsEl?.addEventListener("click", () => setPage("friends"));
 navSettingsEl.addEventListener("click", () => setPage("settings"));
 openHostModalEl.addEventListener("click", openModal);
 closeModalEl.addEventListener("click", closeModal);
@@ -2350,8 +2357,18 @@ activeHostCardEl.addEventListener("click", async (event) => {
   if (!(target instanceof HTMLElement)) return;
   const javaValue = target.closest("[data-copy-host-java]")?.dataset.copyHostJava;
   if (javaValue) {
-    await navigator.clipboard.writeText(toSocketEndpoint(javaValue) ?? javaValue);
-    addLog(t("copiedIp"));
+    // For the host: copy localhost:localPort (what players on the same machine use)
+    const localAddr = `localhost:${hostSession.localPort || 25565}`;
+    await navigator.clipboard.writeText(localAddr);
+    addLog(t("copiedIp") + ` (${localAddr})`);
+    setMinecraftHint(`${t("selectedAddressLabel")}: ${localAddr}`, true);
+    return;
+  }
+  const copyPublic = target.closest("[data-copy-host-public]")?.dataset.copyHostPublic;
+  if (copyPublic) {
+    await navigator.clipboard.writeText(copyPublic);
+    addLog(t("copiedIp") + ` (${copyPublic})`);
+    setMinecraftHint(`${t("selectedAddressLabel")}: ${copyPublic}`, true);
     return;
   }
   const bedrockValue = target.closest("[data-copy-host-bedrock]")?.dataset.copyHostBedrock;
@@ -2421,4 +2438,446 @@ await detectRuntimeFingerprint();
 await setupAbly();
 await pollStatus();
 
+// ═══════════════════════════════════════════════════════════════════════
+//  FRIENDS SYSTEM
+// ═══════════════════════════════════════════════════════════════════════
 
+const FRIENDS_SERVER_KEY = "minecraft-p2p-friends-server";
+const FRIENDS_DEVICE_KEY = "minecraft-p2p-device-id";
+
+const friendsState = {
+  serverUrl: localStorage.getItem(FRIENDS_SERVER_KEY) || "",
+  deviceId: localStorage.getItem(FRIENDS_DEVICE_KEY) || generateDeviceId(),
+  ws: null,
+  user: null,
+  friends: [],
+  pendingRequests: [],
+  connected: false,
+  initialized: false,
+};
+
+if (!localStorage.getItem(FRIENDS_DEVICE_KEY)) {
+  localStorage.setItem(FRIENDS_DEVICE_KEY, friendsState.deviceId);
+}
+
+function generateDeviceId() {
+  return "dev-" + crypto.randomUUID();
+}
+
+function friendsApiUrl(path) {
+  const base = friendsState.serverUrl.replace(/\/+$/, "");
+  return `${base}${path}`;
+}
+
+function friendsHeaders() {
+  return {
+    "Content-Type": "application/json",
+    "X-Device-Id": friendsState.deviceId,
+  };
+}
+
+let friendsInitDone = false;
+function initFriendsPage() {
+  if (!friendsState.serverUrl) {
+    renderFriendsEmpty();
+    return;
+  }
+  if (!friendsInitDone) {
+    friendsInitDone = true;
+    connectFriendsWs();
+  }
+  renderFriendsList();
+}
+
+function renderFriendsEmpty() {
+  const onlineEl = document.querySelector("#friends-online-list");
+  const allEl = document.querySelector("#friends-all-list");
+  const reqEl = document.querySelector("#friends-requests-list");
+  const hostingEl = document.querySelector("#friends-hosting-list");
+  if (onlineEl) onlineEl.innerHTML = `<div class="empty-state">${escapeHtml(t("friendsSetupServer"))}</div>`;
+  if (allEl) allEl.innerHTML = "";
+  if (reqEl) reqEl.innerHTML = "";
+  if (hostingEl) hostingEl.innerHTML = `<div class="empty-state">${escapeHtml(t("friendsNoHosting"))}</div>`;
+}
+
+async function connectFriendsWs() {
+  if (!friendsState.serverUrl) return;
+  if (friendsState.ws) {
+    friendsState.ws.close();
+    friendsState.ws = null;
+  }
+
+  try {
+    const wsUrl = friendsState.serverUrl.replace(/^http/, "ws").replace(/\/+$/, "") + `/ws?deviceId=${encodeURIComponent(friendsState.deviceId)}`;
+    const ws = new WebSocket(wsUrl);
+    friendsState.ws = ws;
+
+    ws.onopen = () => {
+      friendsState.connected = true;
+      addLog("[Friends] WebSocket connected");
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        handleFriendsMessage(msg);
+      } catch { /* ignore */ }
+    };
+
+    ws.onclose = () => {
+      friendsState.connected = false;
+      // Reconnect after 5s
+      setTimeout(() => {
+        if (friendsState.serverUrl) connectFriendsWs();
+      }, 5000);
+    };
+
+    ws.onerror = () => {
+      addLog("[Friends] WebSocket error — check server URL");
+    };
+  } catch (e) {
+    addLog(`[Friends] Connection failed: ${e.message}`);
+  }
+}
+
+function handleFriendsMessage(msg) {
+  switch (msg.type) {
+    case "init":
+      friendsState.user = msg.user;
+      friendsState.friends = msg.friends || [];
+      friendsState.pendingRequests = msg.pendingRequests || [];
+      document.querySelector("#my-friend-code").textContent = msg.user?.friend_code || "----";
+      renderFriendsList();
+      break;
+
+    case "presence":
+      // Update friend's presence in local state
+      const f = friendsState.friends.find((f) => f.id === msg.userId);
+      if (f) {
+        f.online = msg.online ? 1 : 0;
+        f.hosting = msg.hosting ? 1 : 0;
+        f.host_data = msg.hostData ? JSON.stringify(msg.hostData) : null;
+        renderFriendsList();
+      }
+      break;
+
+    case "friend_request":
+      friendsState.pendingRequests.push({
+        id: msg.from.id,
+        nickname: msg.from.nickname,
+        friend_code: msg.from.friendCode,
+        friendship_id: msg.friendshipId,
+      });
+      renderFriendsList();
+      addLog(`[Friends] ${msg.from.nickname} wants to be your friend!`);
+      break;
+
+    case "friend_accepted":
+      addLog(`[Friends] ${msg.by.nickname} accepted your friend request!`);
+      refreshFriendsList();
+      break;
+
+    case "pong":
+      break;
+  }
+}
+
+function renderFriendsList() {
+  const onlineEl = document.querySelector("#friends-online-list");
+  const allEl = document.querySelector("#friends-all-list");
+  const reqEl = document.querySelector("#friends-requests-list");
+  const hostingEl = document.querySelector("#friends-hosting-list");
+
+  const accepted = friendsState.friends.filter((f) => f.status === "accepted");
+  const online = accepted.filter((f) => f.online);
+  const hosting = accepted.filter((f) => f.hosting && f.host_data);
+
+  // Online friends
+  if (onlineEl) {
+    if (!online.length) {
+      onlineEl.innerHTML = `<div class="empty-state">${escapeHtml(t("friendsNoneOnline"))}</div>`;
+    } else {
+      onlineEl.innerHTML = online.map((f) => renderFriendCard(f, true)).join("");
+    }
+  }
+
+  // All friends
+  if (allEl) {
+    if (!accepted.length) {
+      allEl.innerHTML = `<div class="empty-state">${escapeHtml(t("friendsNone"))}</div>`;
+    } else {
+      allEl.innerHTML = accepted.map((f) => renderFriendCard(f, false)).join("");
+    }
+  }
+
+  // Pending requests
+  if (reqEl) {
+    if (!friendsState.pendingRequests.length) {
+      reqEl.innerHTML = `<div class="empty-state">${escapeHtml(t("friendsNoRequests"))}</div>`;
+    } else {
+      reqEl.innerHTML = friendsState.pendingRequests.map((r) => `
+        <div class="friend-card friend-request-card">
+          <div class="friend-avatar">${escapeHtml((r.nickname || "?")[0].toUpperCase())}</div>
+          <div class="friend-info">
+            <strong>${escapeHtml(r.nickname)}</strong>
+            <span class="friend-code-small">${escapeHtml(r.friend_code || "")}</span>
+          </div>
+          <div class="friend-actions">
+            <button class="primary-button compact" onclick="acceptFriendRequest('${escapeHtml(r.friendship_id)}')">${escapeHtml(t("friendsAccept"))}</button>
+            <button class="ghost-button compact danger-button" onclick="rejectFriendRequest('${escapeHtml(r.friendship_id)}')">${escapeHtml(t("friendsReject"))}</button>
+          </div>
+        </div>
+      `).join("");
+    }
+  }
+
+  // Hosting friends
+  if (hostingEl) {
+    if (!hosting.length) {
+      hostingEl.innerHTML = `<div class="empty-state">${escapeHtml(t("friendsNoHosting"))}</div>`;
+    } else {
+      hostingEl.innerHTML = hosting.map((f) => {
+        let hostData = {};
+        try { hostData = JSON.parse(f.host_data); } catch {}
+        return `
+          <div class="friend-card friend-hosting-card">
+            <div class="friend-avatar hosting-glow">${escapeHtml((f.nickname || "?")[0].toUpperCase())}</div>
+            <div class="friend-info">
+              <strong>${escapeHtml(f.nickname)}</strong>
+              <span class="host-room-name">${escapeHtml(hostData.roomName || "Unnamed")}</span>
+              <span class="host-meta-small">${escapeHtml(hostData.version || "")} · ${hostData.online || 0}/${hostData.maxPlayers || 0}</span>
+            </div>
+            <div class="friend-actions">
+              <button class="primary-button compact" onclick="joinFriendHost('${escapeHtml(f.id)}')">${escapeHtml(t("connectButton"))}</button>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+  }
+}
+
+function renderFriendCard(f, showPresence) {
+  const isOnline = f.online;
+  const isHosting = f.hosting;
+  const statusClass = isHosting ? "status-hosting" : isOnline ? "status-online" : "status-offline";
+  const statusText = isHosting ? t("friendsHosting") : isOnline ? t("friendsOnlineStatus") : t("friendsOffline");
+
+  return `
+    <div class="friend-card">
+      <div class="friend-avatar ${statusClass}">${escapeHtml((f.nickname || "?")[0].toUpperCase())}</div>
+      <div class="friend-info">
+        <strong>${escapeHtml(f.nickname)}</strong>
+        ${showPresence ? `<span class="friend-status ${statusClass}">${escapeHtml(statusText)}</span>` : `<span class="friend-code-small">${escapeHtml(f.friend_code || "")}</span>`}
+      </div>
+      <div class="friend-actions">
+        <button class="ghost-button compact danger-button" onclick="removeFriend('${escapeHtml(f.friendship_id)}')" title="${escapeHtml(t("friendsRemove"))}">✕</button>
+      </div>
+    </div>
+  `;
+}
+
+async function refreshFriendsList() {
+  if (!friendsState.serverUrl) return;
+  try {
+    const res = await fetch(friendsApiUrl("/api/friends"), { headers: friendsHeaders() });
+    const data = await res.json();
+    friendsState.friends = data.friends || [];
+    friendsState.pendingRequests = data.pendingRequests || [];
+    renderFriendsList();
+  } catch (e) {
+    addLog(`[Friends] Refresh failed: ${e.message}`);
+  }
+}
+
+// Global functions for onclick handlers
+window.acceptFriendRequest = async function (friendshipId) {
+  try {
+    await fetch(friendsApiUrl("/api/friends/accept"), {
+      method: "POST",
+      headers: friendsHeaders(),
+      body: JSON.stringify({ friendshipId }),
+    });
+    friendsState.pendingRequests = friendsState.pendingRequests.filter((r) => r.friendship_id !== friendshipId);
+    await refreshFriendsList();
+    addLog(t("friendsAccepted"));
+  } catch (e) {
+    addLog(`[Friends] Error: ${e.message}`);
+  }
+};
+
+window.rejectFriendRequest = async function (friendshipId) {
+  try {
+    await fetch(friendsApiUrl(`/api/friends/${friendshipId}`), {
+      method: "DELETE",
+      headers: friendsHeaders(),
+    });
+    friendsState.pendingRequests = friendsState.pendingRequests.filter((r) => r.friendship_id !== friendshipId);
+    renderFriendsList();
+  } catch (e) {
+    addLog(`[Friends] Error: ${e.message}`);
+  }
+};
+
+window.removeFriend = async function (friendshipId) {
+  try {
+    await fetch(friendsApiUrl(`/api/friends/${friendshipId}`), {
+      method: "DELETE",
+      headers: friendsHeaders(),
+    });
+    await refreshFriendsList();
+  } catch (e) {
+    addLog(`[Friends] Error: ${e.message}`);
+  }
+};
+
+window.joinFriendHost = async function (friendId) {
+  const f = friendsState.friends.find((f) => f.id === friendId);
+  if (!f?.host_data) return;
+  let hostData = {};
+  try { hostData = JSON.parse(f.host_data); } catch { return; }
+  if (!hostData.publicAddr) { addLog("[Friends] Host address not available"); return; }
+  addLog(`[Friends] Connecting to ${f.nickname}'s server...`);
+  // TODO: invoke connect_to_peer with hostData.publicAddr
+};
+
+// Send presence heartbeat when hosting
+function sendFriendsHeartbeat() {
+  if (!friendsState.ws || friendsState.ws.readyState !== 1) return;
+  const isHosting = hostSession.active;
+  const heartbeat = {
+    type: "heartbeat",
+    hosting: isHosting,
+  };
+  if (isHosting) {
+    heartbeat.hostData = {
+      roomName: hostSession.roomName,
+      publicAddr: state.status?.publicJoinAddress || state.status?.publicUdpAddr || "",
+      version: state.status?.minecraftVersion || "",
+      online: state.status?.peerCount || 0,
+      maxPlayers: 20,
+    };
+  }
+  friendsState.ws.send(JSON.stringify(heartbeat));
+}
+
+setInterval(sendFriendsHeartbeat, 10000);
+
+// Add friend modal
+const addFriendModal = document.querySelector("#add-friend-modal");
+const addFriendBtn = document.querySelector("#add-friend-btn");
+const closeAddFriendEl = document.querySelector("#close-add-friend");
+const cancelAddFriendEl = document.querySelector("#cancel-add-friend");
+const confirmAddFriendEl = document.querySelector("#confirm-add-friend");
+const addFriendCodeEl = document.querySelector("#add-friend-code");
+const addFriendErrorEl = document.querySelector("#add-friend-error");
+
+function openAddFriendModal() {
+  if (!addFriendModal) return;
+  addFriendModal.classList.remove("hidden");
+  addFriendModal.setAttribute("aria-hidden", "false");
+  addFriendCodeEl.value = "";
+  addFriendErrorEl.classList.add("hidden");
+  addFriendCodeEl.focus();
+}
+
+function closeAddFriendModal() {
+  if (!addFriendModal) return;
+  addFriendModal.classList.add("hidden");
+  addFriendModal.setAttribute("aria-hidden", "true");
+}
+
+addFriendBtn?.addEventListener("click", openAddFriendModal);
+closeAddFriendEl?.addEventListener("click", closeAddFriendModal);
+cancelAddFriendEl?.addEventListener("click", closeAddFriendModal);
+addFriendModal?.addEventListener("click", (e) => {
+  if (e.target instanceof HTMLElement && e.target.dataset.closeAddFriend === "true") closeAddFriendModal();
+});
+
+confirmAddFriendEl?.addEventListener("click", async () => {
+  const code = addFriendCodeEl?.value?.trim().toUpperCase();
+  if (!code || code.length < 4) {
+    addFriendErrorEl.textContent = t("friendsInvalidCode");
+    addFriendErrorEl.classList.remove("hidden");
+    return;
+  }
+  try {
+    const res = await fetch(friendsApiUrl("/api/friends/add"), {
+      method: "POST",
+      headers: friendsHeaders(),
+      body: JSON.stringify({ friendCode: code }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      addFriendErrorEl.textContent = data.error || "Error";
+      addFriendErrorEl.classList.remove("hidden");
+      return;
+    }
+    addLog(t("friendsRequestSent"));
+    closeAddFriendModal();
+  } catch (e) {
+    addFriendErrorEl.textContent = e.message;
+    addFriendErrorEl.classList.remove("hidden");
+  }
+});
+
+// Copy friend code
+document.querySelector("#copy-friend-code")?.addEventListener("click", async () => {
+  const code = document.querySelector("#my-friend-code")?.textContent;
+  if (code && code !== "----") {
+    await navigator.clipboard.writeText(code);
+    addLog(t("copiedFriendCode"));
+  }
+});
+
+// Save friends server URL
+document.querySelector("#save-friends-server")?.addEventListener("click", () => {
+  const url = document.querySelector("#friends-server-url")?.value?.trim();
+  if (url) {
+    friendsState.serverUrl = url;
+    localStorage.setItem(FRIENDS_SERVER_KEY, url);
+    friendsInitDone = false;
+    initFriendsPage();
+    addLog(`[Friends] Server URL saved: ${url}`);
+  }
+});
+
+// Restore saved server URL
+const savedFriendsUrl = localStorage.getItem(FRIENDS_SERVER_KEY);
+if (savedFriendsUrl) {
+  const urlInput = document.querySelector("#friends-server-url");
+  if (urlInput) urlInput.value = savedFriendsUrl;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  NAT TYPE DETECTION UI
+// ═══════════════════════════════════════════════════════════════════════
+
+document.querySelector("#run-nat-test")?.addEventListener("click", async () => {
+  const typeEl = document.querySelector("#nat-type-value");
+  const ipEl = document.querySelector("#nat-public-ip");
+  const noteEl = document.querySelector("#nat-note");
+  if (typeEl) typeEl.textContent = t("natTesting");
+
+  try {
+    const result = await invoke("detect_nat_type_command");
+    if (typeEl) {
+      const labels = {
+        open: "✅ Open / Full Cone",
+        symmetric: "⚠️ Symmetric",
+        restricted: "🔶 Restricted",
+        blocked: "❌ Blocked",
+        error: "❌ Error",
+        multiple_ips: "🔀 Multiple IPs",
+      };
+      typeEl.textContent = labels[result.natType] || result.natType;
+    }
+    if (ipEl) ipEl.textContent = result.publicIp || "—";
+    if (noteEl) noteEl.textContent = result.note || "";
+    addLog(`[NAT] Type: ${result.natType}, IP: ${result.publicIp || "?"}`);
+  } catch (e) {
+    if (typeEl) typeEl.textContent = "Error";
+    if (noteEl) noteEl.textContent = String(e);
+    addLog(`[NAT] Detection failed: ${e}`);
+  }
+});

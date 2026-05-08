@@ -3,6 +3,7 @@ pub mod geyser;
 pub mod manager;
 pub mod minecraft;
 pub mod proxy;
+pub mod stun;
 pub mod upnp;
 
 pub mod test_server;

@@ -40,6 +40,10 @@
             <img src="./assets/icons/home.svg" alt="" />
             <span data-i18n="navHome">Главная</span>
           </button>
+          <button id="nav-friends" class="nav-button" type="button" aria-label="Друзья">
+            <img src="./assets/icons/home.svg" alt="" />
+            <span data-i18n="navFriends">Друзья</span>
+          </button>
           <button id="nav-settings" class="nav-button" type="button" aria-label="Настройки">
             <img src="./assets/icons/settings.svg" alt="" />
             <span data-i18n="navSettings">Настройки</span>
@@ -179,6 +183,100 @@
                   <button id="stop-test-server" class="ghost-button" type="button" data-i18n="diagnosticsStopTestServer">Остановить тестовый сервер</button>
                   <button id="probe-test-server" class="ghost-button" type="button" data-i18n="diagnosticsProbeTestServer">Проверить тестовый сервер</button>
                 </div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section id="page-friends" class="page">
+          <header class="hero-panel">
+            <div class="hero-left">
+              <h1 data-i18n="friendsTitle">Друзья</h1>
+              <p class="hero-subtitle" data-i18n="friendsSubtitle">Играйте вместе без лишних настроек</p>
+            </div>
+            <div class="hero-right">
+              <div class="friend-code-display">
+                <span class="eyebrow" data-i18n="friendsYourCode">Ваш код</span>
+                <strong id="my-friend-code" class="friend-code-value">----</strong>
+                <button id="copy-friend-code" class="ghost-button compact" type="button" data-i18n="copyButton">Копировать</button>
+              </div>
+            </div>
+          </header>
+
+          <div class="friends-layout">
+            <div class="stack-column">
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2 data-i18n="friendsOnline">Онлайн друзья</h2>
+                  </div>
+                  <button id="add-friend-btn" class="primary-button compact" type="button" data-i18n="friendsAddButton">+ Добавить</button>
+                </div>
+                <div id="friends-online-list" class="friends-grid"></div>
+              </section>
+
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2 data-i18n="friendsAll">Все друзья</h2>
+                  </div>
+                </div>
+                <div id="friends-all-list" class="friends-grid"></div>
+              </section>
+
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2 data-i18n="friendsRequests">Входящие заявки</h2>
+                  </div>
+                </div>
+                <div id="friends-requests-list" class="friends-grid"></div>
+              </section>
+            </div>
+
+            <div class="stack-column side-column">
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2 data-i18n="friendsHosting">Сейчас хостят</h2>
+                  </div>
+                </div>
+                <div id="friends-hosting-list" class="friends-grid">
+                  <div class="empty-state" data-i18n="friendsNoHosting">Никто из друзей не хостит</div>
+                </div>
+              </section>
+
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2 data-i18n="natDiagTitle">NAT диагностика</h2>
+                  </div>
+                  <button id="run-nat-test" class="ghost-button compact" type="button" data-i18n="natRunButton">Проверить</button>
+                </div>
+                <div id="nat-result" class="nat-result">
+                  <div class="metric">
+                    <span data-i18n="natTypeLabel">Тип NAT</span>
+                    <strong id="nat-type-value">—</strong>
+                  </div>
+                  <div class="metric">
+                    <span data-i18n="natPublicIp">Публичный IP</span>
+                    <strong id="nat-public-ip">—</strong>
+                  </div>
+                  <p id="nat-note" class="panel-copy"></p>
+                </div>
+              </section>
+
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2 data-i18n="friendsServerUrl">Сервер друзей</h2>
+                  </div>
+                </div>
+                <label class="field">
+                  <span data-i18n="friendsServerLabel">URL сервера</span>
+                  <input id="friends-server-url" type="url" placeholder="https://your-vps.com:3478" value="" />
+                </label>
+                <button id="save-friends-server" class="primary-button compact" type="button" data-i18n="saveButton">Сохранить</button>
               </section>
             </div>
           </div>
@@ -443,6 +541,30 @@
         <div class="modal-actions">
           <button id="kick-button" class="ghost-button danger-button" type="button" data-i18n="kickButton">Кикнуть</button>
           <button id="close-player-modal-secondary" class="primary-button" type="button" data-i18n="closeAria">Закрыть</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="add-friend-modal" class="modal-shell hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-add-friend="true"></div>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="add-friend-title">
+        <div class="panel-head">
+          <div>
+            <span class="eyebrow" data-i18n="addFriendLabel">ДОБАВИТЬ ДРУГА</span>
+            <h2 id="add-friend-title" data-i18n="addFriendTitle">Введите код друга</h2>
+          </div>
+          <button id="close-add-friend" class="icon-button" type="button" aria-label="Закрыть">×</button>
+        </div>
+        <div class="modal-grid">
+          <label class="field">
+            <span data-i18n="addFriendCodeLabel">Код друга</span>
+            <input id="add-friend-code" type="text" maxlength="9" placeholder="XXXX-XXXX" style="text-transform: uppercase; letter-spacing: 0.15em; font-family: monospace; font-size: 1.25rem;" />
+          </label>
+          <p id="add-friend-error" class="field-error hidden"></p>
+        </div>
+        <div class="modal-actions">
+          <button id="cancel-add-friend" class="ghost-button" type="button" data-i18n="cancelButton">Отмена</button>
+          <button id="confirm-add-friend" class="primary-button" type="button" data-i18n="addFriendConfirm">Отправить заявку</button>
         </div>
       </div>
     </div>

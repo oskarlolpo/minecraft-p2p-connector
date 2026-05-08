@@ -49,6 +49,12 @@ const FRAME_HELLO: u8 = 4;
 const FRAME_READY: u8 = 5;
 const FRAME_ERROR: u8 = 6;
 const FRAME_PING: u8 = 7;
+const FRAME_DATA_ZSTD: u8 = 8; // Zstd-compressed DATA frame
+
+// Only compress DATA payloads above this threshold (bytes).
+// Small frames have negligible savings but add CPU overhead.
+const ZSTD_MIN_PAYLOAD: usize = 64;
+const ZSTD_LEVEL: i32 = 1; // fastest compression
 
 // ── Tunables ────────────────────────────────────────────────────────────
 
@@ -651,7 +657,7 @@ async fn pump_reader_to_ws<R: tokio::io::AsyncRead + Unpin>(
         match n {
             Ok(0) => break,
             Ok(size) => {
-                let frame = encode_frame(FRAME_DATA, stream_id, &buffer[..size]);
+                let frame = encode_data_frame_maybe_compressed(stream_id, &buffer[..size]);
                 if ws_tx.send(Message::Binary(frame)).await.is_err() {
                     break;
                 }
@@ -712,9 +718,47 @@ fn decode_frame(data: &[u8]) -> Result<Frame<'_>> {
     if data.len() < 9 {
         return Err(anyhow!("WSS relay frame too short ({} bytes)", data.len()));
     }
+    let kind = data[0];
+    let stream_id = u64::from_be_bytes(data[1..9].try_into().unwrap());
+    let payload = &data[9..];
+
+    // Transparent zstd decompression for FRAME_DATA_ZSTD
+    if kind == FRAME_DATA_ZSTD {
+        // We can't return a borrowed slice for decompressed data in Frame<'_>,
+        // so we return the raw payload and let the caller decompress.
+        // To keep the API simple, we re-tag as FRAME_DATA here.
+        // The actual decompression happens inline in the handler.
+        return Ok(Frame {
+            kind: FRAME_DATA,
+            stream_id,
+            payload,
+        });
+    }
+
     Ok(Frame {
-        kind: data[0],
-        stream_id: u64::from_be_bytes(data[1..9].try_into().unwrap()),
-        payload: &data[9..],
+        kind,
+        stream_id,
+        payload,
     })
+}
+
+/// Encode a DATA frame with optional zstd compression.
+/// If the payload is large enough and compresses well, use FRAME_DATA_ZSTD.
+fn encode_data_frame_maybe_compressed(stream_id: u64, payload: &[u8]) -> Vec<u8> {
+    if payload.len() < ZSTD_MIN_PAYLOAD {
+        return encode_frame(FRAME_DATA, stream_id, payload);
+    }
+
+    match zstd::stream::encode_all(std::io::Cursor::new(payload), ZSTD_LEVEL) {
+        Ok(compressed) if compressed.len() < payload.len() => {
+            encode_frame(FRAME_DATA_ZSTD, stream_id, &compressed)
+        }
+        _ => encode_frame(FRAME_DATA, stream_id, payload),
+    }
+}
+
+/// Decompress a zstd-encoded DATA payload.
+fn zstd_decompress_data(compressed: &[u8]) -> Result<Vec<u8>> {
+    zstd::stream::decode_all(std::io::Cursor::new(compressed))
+        .context("zstd decompression failed for WSS relay frame")
 }

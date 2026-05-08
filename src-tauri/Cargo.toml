@@ -33,3 +33,4 @@ hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1"] 
 http-body-util = "0.1"
 trust-dns-resolver = { version = "0.23", default-features = true }
 encoding_rs = "0.8"
+zstd = "0.13"

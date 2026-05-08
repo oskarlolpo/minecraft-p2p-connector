@@ -15,12 +15,14 @@ use network::minecraft::{
 };
 use network::manager::NetworkManager;
 use network::geyser::GeyserManager;
+use network::stun;
 use network::test_server::{probe_test_server, TestServerManager};
 use models::{
     AppInfo, DiagnosticSnapshot, ExternalServerProbe, InstallUpdateResult, LanPortDetection,
     LocalPlayerSnapshot, MinecraftClientRuntimeInfo, MinecraftNicknameDetection, NetworkStatus,
     PreflightReport, SwarmBootstrap, TestServerInfo, UpdateCheckResult,
 };
+use network::stun::NatTypeResult;
 use std::{path::PathBuf, process::Command, time::{SystemTime, UNIX_EPOCH}};
 use tauri::{AppHandle, State};
 use tokio::sync::Mutex;
@@ -49,6 +51,12 @@ async fn start_hosting(
     geyser_port: Option<u16>,
     enable_e4mc: Option<bool>,
 ) -> Result<SwarmBootstrap, String> {
+    // Preflight: check that the local game port is actually reachable
+    if let Err(e) = stun::preflight_port_check(local_port) {
+        tracing::warn!("Preflight port check failed: {e:#}");
+        // Non-fatal: log but proceed (Minecraft may be using the port)
+    }
+
     let room_name_for_geyser = room_name.clone();
     let public_addr = state
         .manager
@@ -310,6 +318,16 @@ async fn probe_test_server_command(port: u16, payload: Option<String>) -> Result
 }
 
 #[tauri::command]
+async fn detect_nat_type_command() -> Result<NatTypeResult, String> {
+    Ok(stun::detect_nat_type().await)
+}
+
+#[tauri::command]
+async fn preflight_port_check_command(port: u16) -> Result<(), String> {
+    stun::preflight_port_check(port).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
 async fn export_diagnostics_snapshot(
     state: State<'_, AppState>,
     local_port: Option<u16>,
@@ -485,7 +503,9 @@ fn main() {
             stop_test_server,
             probe_test_server_command,
             export_diagnostics_snapshot,
-            get_available_lan_ports_command
+            get_available_lan_ports_command,
+            detect_nat_type_command,
+            preflight_port_check_command
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
