@@ -1,5 +1,6 @@
 pub mod e4mc;
 pub mod geyser;
+pub mod java_downloader;
 pub mod bedrock_broadcaster;
 pub mod nethernet_broadcaster;
 pub mod manager;

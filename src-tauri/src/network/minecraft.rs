@@ -90,15 +90,34 @@ pub async fn probe_external_server(host: String, port: u16) -> Result<ExternalSe
 }
 
 pub async fn build_preflight_report(port: u16) -> PreflightReport {
+    let mut note_parts = Vec::new();
+    
+    // Check if it's a server (Paper/Purpur) to recommend SkinsRestorer
+    if let Ok(candidates) = task::spawn_blocking(detect_all_lan_ports_blocking).await {
+        if let Ok(ports) = candidates {
+            if let Some(det) = ports.iter().find(|p| p.port == port) {
+                if det.source_line.to_lowercase().contains("paper") || det.source_line.to_lowercase().contains("purpur") || det.source_line.to_lowercase().contains("spigot") {
+                    note_parts.push("Detected a Paper/Purpur/Spigot server. For skin support, consider installing the SkinsRestorer plugin.".to_string());
+                }
+            }
+        }
+    }
+
     match detect_local_version(port).await {
-        Ok(version) => PreflightReport {
-            local_port: port,
-            reachable: true,
-            state: LocalTargetState::Reachable,
-            minecraft_version: Some(version),
-            recommended_host_action:
-                "Local Minecraft is reachable. You can launch the host and publish the room.".into(),
-            note: Some("The world is already open to LAN or the local server is accepting connections.".into()),
+        Ok(version) => {
+            let mut note = "The world is already open to LAN or the local server is accepting connections.".to_string();
+            if !note_parts.is_empty() {
+                note = format!("{}\n\nTips: {}", note, note_parts.join(" "));
+            }
+            PreflightReport {
+                local_port: port,
+                reachable: true,
+                state: LocalTargetState::Reachable,
+                minecraft_version: Some(version),
+                recommended_host_action:
+                    "Local Minecraft is reachable. You can launch the host and publish the room.".into(),
+                note: Some(note),
+            }
         },
         Err(version_error) => match probe_local_tcp(port).await {
             Ok(()) => PreflightReport {
@@ -522,6 +541,23 @@ fn detect_lan_ports_from_system_listeners() -> Vec<LanPortDetection> {
             let mut priority = 0;
             let cmd = meta.command_line.to_lowercase();
             
+            // Try to find port in logs of this specific process
+            let mut detected_port = None;
+            if let Some(wd) = &meta.working_dir {
+                // Check latest.log in the working directory
+                let log_path = wd.join("logs").join("latest.log");
+                if log_path.exists() {
+                    if let Some(contents) = read_text_lossy(&log_path) {
+                        for line in contents.lines().rev().take(100) {
+                            if let Some(p) = extract_port_from_line(line) {
+                                detected_port = Some(p);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
             // 0. Base check: is it even likely to be Minecraft?
             let is_mc_related = cmd.contains("minecraft") 
                 || cmd.contains(".minecraft")
@@ -540,7 +576,6 @@ fn detect_lan_ports_from_system_listeners() -> Vec<LanPortDetection> {
             } else if is_mc_related {
                 priority += 150; 
             } else {
-                // Just javaw without MC markers. Could be anything (like IntelliJ). Give a minor base score.
                 priority += 10; 
             }
             
@@ -549,7 +584,13 @@ fn detect_lan_ports_from_system_listeners() -> Vec<LanPortDetection> {
                 priority += 100;
             }
             
-            // 2. If it's the port defined in server.properties
+            // 2. If it matches the port found in THIS process's logs or config
+            if let Some(p) = detected_port {
+                if port == p {
+                    priority += 400; // Strong match!
+                }
+            }
+
             if let Some(target) = meta.server_port {
                 if port == target {
                     priority += 250;
@@ -565,17 +606,8 @@ fn detect_lan_ports_from_system_listeners() -> Vec<LanPortDetection> {
             if is_mc_related && (cmd.contains("minecraft.applet") || cmd.contains("net.minecraft.client.main.main")) {
                 priority += 80;
                 if port > 49151 {
-                    priority += 70; // LAN миры обычно на высоких портах
+                    priority += 70;
                 }
-            } else if is_javaw && !is_mc_related {
-                // If it's only javaw, high port might indicate a LAN world, but we give it a much smaller boost
-                if port > 49151 {
-                    priority += 20; 
-                }
-            }
-            
-            if port > 49151 {
-                priority += 5;
             }
 
             candidates.push((priority, port, pid, local.to_string()));

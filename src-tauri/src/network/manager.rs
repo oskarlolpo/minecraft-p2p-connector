@@ -916,6 +916,7 @@ impl NetworkManager {
         connection: Connection,
         peer_id: String,
         cancel: CancellationToken,
+        app: AppHandle,
     ) -> JoinHandle<()> {
         let manager = self.clone();
         tokio::spawn(async move {
@@ -925,9 +926,18 @@ impl NetworkManager {
                     _ = tokio::time::sleep(Duration::from_secs(1)) => {}
                 }
 
-                manager
-                    .update_peer_ping(&peer_id, connection.rtt().as_millis() as u64)
-                    .await;
+                let rtt = connection.rtt().as_millis() as u64;
+                manager.update_peer_ping(&peer_id, rtt).await;
+
+                // Connection Health Stats
+                let stats = connection.stats();
+                let _ = app.emit("peer-health", serde_json::json!({
+                    "peerId": peer_id,
+                    "pingMs": rtt,
+                    "packetLoss": stats.path.lost_packets,
+                    "sentPackets": stats.path.sent_packets,
+                    "recvPackets": stats.path.recv_packets,
+                }));
 
                 if connection.close_reason().is_some() {
                     break;

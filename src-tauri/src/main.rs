@@ -77,6 +77,7 @@ async fn start_hosting(
         match state
             .geyser
             .start(
+                app.clone(),
                 local_port,
                 &room_name_for_geyser,
                 geyser_port,

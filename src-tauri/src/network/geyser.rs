@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::Read,
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Arc,
@@ -8,6 +8,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
+use tauri::{AppHandle, Emitter};
 use tokio::{sync::Mutex, task};
 
 use crate::models::GeyserRuntimeInfo;
@@ -45,8 +46,9 @@ impl GeyserManager {
         }
     }
 
-pub async fn start(
+    pub async fn start(
         &self,
+        app: AppHandle,
         local_java_port: u16,
         room_name: &str,
         bedrock_port: Option<u16>,
@@ -75,28 +77,43 @@ pub async fn start(
         let log_path = runtime_dir.join("geyser.log");
         write_config(&config_path, local_java_port, resolved_bedrock_port, room_name)?;
 
-        let log_file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-            .with_context(|| format!("failed to open Geyser log file {}", log_path.display()))?;
-        let log_file_err = log_file
-            .try_clone()
-            .context("failed to duplicate Geyser log handle")?;
-
-        let java_path = resolve_java_binary();
+        // We'll pipe stdout and stderr to a file AND stream it to the UI
+        let java_path = super::java_downloader::ensure_java_ready(&app).await.unwrap_or_else(|_| super::java_downloader::resolve_java_binary());
+        
         let firewall_result = ensure_firewall_rule(resolved_bedrock_port);
         let firewall_rule_name = firewall_result.as_ref().ok().cloned();
         let firewall_note = firewall_result.err().map(|error| error.to_string());
 
-        let child = spawn_geyser_process(
+        let mut child = spawn_geyser_process(
             &java_path,
             &runtime_jar,
             &runtime_dir,
             &config_path,
-            log_file,
-            log_file_err,
         )?;
+
+        let stdout = child.stdout.take().context("failed to take Geyser stdout")?;
+        let stderr = child.stderr.take().context("failed to take Geyser stderr")?;
+
+        // Spawn log forwarding tasks
+        let app_stdout = app.clone();
+        task::spawn_blocking(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                if let Ok(l) = line {
+                    let _ = app_stdout.emit("geyser-log", l);
+                }
+            }
+        });
+
+        let app_stderr = app.clone();
+        task::spawn_blocking(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                if let Ok(l) = line {
+                    let _ = app_stderr.emit("geyser-log", format!("[ERROR] {}", l));
+                }
+            }
+        });
 
         let mut state = self.inner.lock().await;
         state.child = Some(child);
@@ -128,19 +145,9 @@ pub async fn start(
         let mut state = self.inner.lock().await;
         if let Some(child) = state.child.as_mut() {
             if let Some(status) = child.try_wait().context("failed to query Geyser process status")? {
-                let mut log_tail = String::new();
-                if let Ok(mut file) = fs::File::open(&log_path) {
-                    let _ = file.read_to_string(&mut log_tail);
-                }
                 state.child = None;
                 state.info.running = false;
                 state.info.last_error = Some(format!("Geyser exited early with status {status}."));
-                if !log_tail.trim().is_empty() {
-                    state.info.note = Some(format!(
-                        "Geyser exited early. Last log output:\n{}",
-                        tail_lines(&log_tail, 16)
-                    ));
-                }
                 return Err(anyhow!(
                     state
                         .info
@@ -180,8 +187,6 @@ fn spawn_geyser_process(
     jar_path: &Path,
     runtime_dir: &Path,
     config_path: &Path,
-    stdout: fs::File,
-    stderr: fs::File,
 ) -> Result<Child> {
     let mut command = Command::new(java_path);
     command
@@ -193,8 +198,8 @@ fn spawn_geyser_process(
         .arg(config_path)
         .current_dir(runtime_dir)
         .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr));
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
     #[cfg(target_os = "windows")]
     {
@@ -233,9 +238,9 @@ fn resolve_source_jar() -> Result<PathBuf> {
         }
     }
 
-    candidates.push(PathBuf::from(r"G:\minecraftjava\p2p\src-tauri\resources\geyser").join(GEYSER_JAR_NAME));
+    candidates.push(PathBuf::from(r"G:\oskarlolpo project\minecraftjava\01_Active\p2p\src-tauri\resources\geyser").join(GEYSER_JAR_NAME));
     candidates.push(
-        PathBuf::from(r"G:\minecraftjava\Geyser-master\bootstrap\standalone\build\libs")
+        PathBuf::from(r"G:\oskarlolpo project\minecraftjava\03_Integrations\Geyser-master\bootstrap\standalone\build\libs")
             .join(GEYSER_JAR_NAME),
     );
 
@@ -243,7 +248,7 @@ fn resolve_source_jar() -> Result<PathBuf> {
         return Ok(found);
     }
 
-    let libs_dir = PathBuf::from(r"G:\minecraftjava\Geyser-master\bootstrap\standalone\build\libs");
+    let libs_dir = PathBuf::from(r"G:\oskarlolpo project\minecraftjava\03_Integrations\Geyser-master\bootstrap\standalone\build\libs");
     if libs_dir.exists() {
         if let Some(found) = fs::read_dir(&libs_dir)
             .ok()
@@ -297,7 +302,7 @@ motd:
   passthrough-motd: true
   max-players: 100
   passthrough-player-counts: true
-  integrated-ping-passthrough: false
+  integrated-ping-passthrough: true
   ping-passthrough-interval: 3
 gameplay:
   server-name: "{motd}"
@@ -311,7 +316,7 @@ gameplay:
   enable-custom-content: true
   force-resource-packs: false
   enable-integrated-pack: true
-  forward-player-ping: false
+  forward-player-ping: true
   xbox-achievements-enabled: false
   max-visible-custom-skulls: 128
   custom-skull-render-distance: 32
@@ -338,6 +343,10 @@ advanced:
     use-waterdogpe-forwarding: false
     mtu: 1400
   validate-bedrock-login: false
+  # Global API for Bedrock skins support
+  api:
+    base-url: "https://api.geysermc.org"
+    skin-refresh-interval: 1440
 enable-metrics: false
 debug-mode: false
 config-version: 5
