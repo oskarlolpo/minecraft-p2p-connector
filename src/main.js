@@ -316,8 +316,6 @@ function syncExternalHostMode() {
 function renderProfile() {
   const nickname = state.profile.nickname?.trim() || "Player";
   brandUserNameEl.textContent = nickname;
-  profileNicknameEl.value = nickname;
-
   if (state.profile.avatarDataUrl) {
     brandAvatarImageEl.src = state.profile.avatarDataUrl;
     brandAvatarImageEl.classList.remove("hidden");
@@ -537,7 +535,7 @@ async function loadAppInfo() {
     const info = await invoke("get_app_info");
     settingsVersionEl.textContent = info.version;
   } catch {
-    settingsVersionEl.textContent = "unknown";
+    settingsVersionEl.textContent = "0.3.32";
   }
 }
 
@@ -571,34 +569,8 @@ async function installUpdate() {
   }
 }
 
-// Brand avatar → open own profile
-document.querySelector("#open-own-profile")?.addEventListener("click", () => {
-  openOwnProfile();
-});
-
-async function pickAvatarFile() {
-  // handled via profile modal
-}
-
-async function handleAvatarChosen() {
-  const file = profileAvatarFileEl.files?.[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    state.profile.avatarDataUrl = String(reader.result || "");
-    renderProfile();
-  };
-  reader.readAsDataURL(file);
-}
-
-function saveProfileFromInputs() {
-  state.profile.nickname = profileNicknameEl.value.trim() || "Player";
-  saveProfileState();
-  renderProfile();
-  addLog(t("profileSaved"));
-  toggleProfileMenu(false);
-}
-
+window.decodeMojibakeIfNeeded = function(t) { return t; };
+function decodeMojibakeIfNeeded(t) { return t; }
 function addLog(message) {
   const normalizedMessage = decodeMojibakeIfNeeded(String(message ?? ""));
   const stamp = new Date().toLocaleTimeString(state.preferences.language === "ru" ? "ru-RU" : "en-US", {
@@ -2262,12 +2234,9 @@ connectSelectedEl.addEventListener("click", async () => {
   const selected = getSelectedServer();
   if (selected) await connectToServer(selected);
 });
-profileMenuTriggerEl.addEventListener("click", () => {
-  toggleProfileMenu();
+profileMenuTriggerEl?.addEventListener("click", () => {
+  openOwnProfile();
 });
-chooseAvatarEl.addEventListener("click", pickAvatarFile);
-profileAvatarFileEl.addEventListener("change", handleAvatarChosen);
-saveProfileEl.addEventListener("click", saveProfileFromInputs);
 checkUpdatesEl.addEventListener("click", checkForUpdates);
 installUpdateEl.addEventListener("click", installUpdate);
 
@@ -2375,12 +2344,7 @@ document.addEventListener("click", (event) => {
     const label = button.dataset.i18n ? t(button.dataset.i18n) : button.textContent?.trim() || button.id || "button";
     addLog(`UI action: ${label}`);
   }
-  if (!profileMenuEl?.contains(target) && !profileMenuTriggerEl?.contains(target)) {
-    toggleProfileMenu(false);
-  }
 });
-window.addEventListener("resize", positionProfileMenu);
-window.addEventListener("scroll", positionProfileMenu, true);
 
 document.body.dataset.theme = state.preferences.theme;
 applyAccent(state.preferences.accent);
@@ -2389,7 +2353,6 @@ renderSettingsOptions();
 syncPasswordField();
 syncGeyserField();
 syncExternalHostMode();
-ensureProfileMenuPortal();
 renderProfile();
 renderLogs();
 renderSelectedServer();
@@ -3261,6 +3224,7 @@ window.toggleFollow = async function(userId, isFollowing) {
     addLog(`[Follow] Error: ${e.message}`);
   }
 };
+
 
 
 
