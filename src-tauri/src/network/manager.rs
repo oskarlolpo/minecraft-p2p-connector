@@ -376,7 +376,7 @@ impl NetworkManager {
         let relay_sessions = Arc::new(Mutex::new(HashMap::<String, HostRelayRuntime>::new()));
         let has_password = password.is_some();
         let e4mc_runtime = if enable_e4mc {
-            Some(self.spawn_e4mc_host_runtime(app, local_port))
+            Some(self.spawn_e4mc_host_runtime(app.clone(), local_port))
         } else {
             None
         };
@@ -443,6 +443,7 @@ impl NetworkManager {
 
         let cancel = CancellationToken::new();
         let accept_task = self.spawn_host_accept_loop(
+            app,
             endpoint,
             expected_peers.clone(),
             live_connections.clone(),
@@ -776,7 +777,7 @@ impl NetworkManager {
 
         let proxy_task =
             self.spawn_client_proxy_loop(local_listener, connection.clone(), cancel.clone());
-        let ping_task = self.spawn_ping_loop(connection.clone(), peer_id.clone(), cancel.clone());
+        let ping_task = self.spawn_ping_loop(connection.clone(), peer_id.clone(), cancel.clone(), app.clone());
         let close_task = self.spawn_client_close_loop(connection, peer_id, cancel.clone());
 
         tokio::select! {
@@ -791,6 +792,7 @@ impl NetworkManager {
 
     fn spawn_host_accept_loop(
         &self,
+        app: AppHandle,
         endpoint: Endpoint,
         expected_peers: Arc<RwLock<HashMap<SocketAddr, String>>>,
         live_connections: Arc<Mutex<HashMap<String, Connection>>>,
@@ -842,6 +844,7 @@ impl NetworkManager {
                         let connection_cancel = cancel.clone();
                         let connection_manager = manager.clone();
                         let live_connections = live_connections.clone();
+                        let app_inner = app.clone();
                         tokio::spawn(async move {
                             connection_manager
                                 .handle_host_connection(
@@ -850,6 +853,7 @@ impl NetworkManager {
                                     live_connections,
                                     local_game_port,
                                     connection_cancel,
+                                    app_inner,
                                 )
                                 .await;
                         });
@@ -936,7 +940,6 @@ impl NetworkManager {
                     "pingMs": rtt,
                     "packetLoss": stats.path.lost_packets,
                     "sentPackets": stats.path.sent_packets,
-                    "recvPackets": stats.path.recv_packets,
                 }));
 
                 if connection.close_reason().is_some() {
@@ -975,8 +978,9 @@ impl NetworkManager {
         live_connections: Arc<Mutex<HashMap<String, Connection>>>,
         local_game_port: u16,
         cancel: CancellationToken,
+        app: AppHandle,
     ) {
-        let ping_task = self.spawn_ping_loop(connection.clone(), peer_id.clone(), cancel.clone());
+        let ping_task = self.spawn_ping_loop(connection.clone(), peer_id.clone(), cancel.clone(), app.clone());
 
         loop {
             let stream = tokio::select! {

@@ -61,7 +61,7 @@ async fn start_hosting(
     let public_addr = state
         .manager
         .start_hosting(
-            app,
+            app.clone(),
             room_name,
             password,
             local_port,
