@@ -762,7 +762,13 @@ impl NetworkManager {
             },
         );
 
-                let _broadcaster = super::bedrock_broadcaster::BedrockBroadcaster::start(
+                        let _nethernet = super::nethernet_broadcaster::NetherNetBroadcaster::start(
+            format!("P2P {}", peer_id),
+            19132,
+            cancel.clone(),
+        ).await;
+
+        let _broadcaster = super::bedrock_broadcaster::BedrockBroadcaster::start(
             format!("P2P {}", peer_id),
             19132,
             cancel.clone(),
@@ -1510,5 +1516,6 @@ impl NetworkManager {
         }
     }
 }
+
 
 

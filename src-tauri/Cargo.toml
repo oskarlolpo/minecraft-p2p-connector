@@ -34,4 +34,12 @@ http-body-util = "0.1"
 trust-dns-resolver = { version = "0.23", default-features = true }
 encoding_rs = "0.8"
 zstd = "0.13"
+aes = "0.8.4"
+ecb = "0.1.2"
+hmac = "0.12.1"
+sha2 = "0.10.9"
+pkcs7 = "0.4.1"
+block-padding = "0.3.3"
+rand = "0.9.4"
+hex = "0.4.3"
 
