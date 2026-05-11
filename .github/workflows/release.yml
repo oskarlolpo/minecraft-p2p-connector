@@ -38,10 +38,12 @@ jobs:
       - name: Build and publish Tauri bundle
         uses: tauri-apps/tauri-action@v0.6.2
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Minecraft P2P Connector ${{ github.ref_name }}
+          owner: oskarlolpo
+          repo: minecraft-p2p-connector
+          tagName: v${{ github.ref_name }}
+          releaseName: Minecraft P2P Connector v${{ github.ref_name }}
           releaseBody: Direct UDP hole-punching Minecraft Java connector for Windows.
           releaseDraft: false
           prerelease: false

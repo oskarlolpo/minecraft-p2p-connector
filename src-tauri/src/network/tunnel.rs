@@ -1,3 +1,4 @@
+use tauri::AppHandle;
 use std::{io::ErrorKind, time::Duration};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -97,6 +98,7 @@ enum ServerMessage {
 }
 
 pub async fn start_reverse_tunnel(
+    app: AppHandle,
     config: ReverseTunnelConfig,
     cancel: CancellationToken,
 ) -> Result<ReverseTunnelHandle> {
@@ -118,12 +120,13 @@ pub async fn start_reverse_tunnel(
         public_port: remote_port,
     };
 
-    let task = tokio::spawn(run_reverse_tunnel_control_loop(control, config, cancel));
+    let task = tokio::spawn(run_reverse_tunnel_control_loop(app, control, config, cancel));
 
     Ok(ReverseTunnelHandle { endpoint, task })
 }
 
 pub async fn bridge_tcp_to_remote(
+    app: AppHandle,
     mut local_stream: TcpStream,
     remote_host: &str,
     remote_port: u16,
@@ -137,13 +140,14 @@ pub async fn bridge_tcp_to_remote(
     configure_tcp_stream(&remote_stream)
         .with_context(|| format!("не удалось настроить reverse tunnel stream для {remote_host}:{remote_port}"))?;
 
-    copy_bidirectional_tolerant(&mut local_stream, &mut remote_stream)
+    copy_bidirectional_tolerant(&app, &mut local_stream, &mut remote_stream)
         .await
         .context("copy_bidirectional через reverse tunnel завершился ошибкой")?;
     Ok(())
 }
 
 async fn run_reverse_tunnel_control_loop(
+    app: AppHandle,
     mut control: Delimited<TcpStream>,
     config: ReverseTunnelConfig,
     cancel: CancellationToken,
@@ -156,8 +160,9 @@ async fn run_reverse_tunnel_control_loop(
                     Some(ServerMessage::Heartbeat) => {}
                     Some(ServerMessage::Connection(id)) => {
                         let connection_config = config.clone();
+                        let app_clone = app.clone();
                         tokio::spawn(async move {
-                            if let Err(error) = accept_reverse_connection(connection_config, id).await {
+                            if let Err(error) = accept_reverse_connection(app_clone, connection_config, id).await {
                                 tracing::warn!("reverse tunnel connection {id} failed: {error:#}");
                             }
                         });
@@ -175,7 +180,7 @@ async fn run_reverse_tunnel_control_loop(
     Ok(())
 }
 
-async fn accept_reverse_connection(config: ReverseTunnelConfig, id: Uuid) -> Result<()> {
+async fn accept_reverse_connection(app: AppHandle, config: ReverseTunnelConfig, id: Uuid) -> Result<()> {
     let mut remote = Delimited::new(connect_with_timeout(&config.server_host, config.control_port).await?);
     remote
         .send(ClientMessage::Accept(id))
@@ -196,7 +201,7 @@ async fn accept_reverse_connection(config: ReverseTunnelConfig, id: Uuid) -> Res
             .context("не удалось отправить buffered bytes в локальный target")?;
     }
 
-    copy_bidirectional_tolerant(&mut local, &mut parts.io)
+    copy_bidirectional_tolerant(&app, &mut local, &mut parts.io)
         .await
         .context("copy_bidirectional reverse tunnel завершился ошибкой")?;
     Ok(())
@@ -247,18 +252,75 @@ fn configure_tcp_stream(stream: &TcpStream) -> Result<()> {
     Ok(())
 }
 
-async fn copy_bidirectional_tolerant<A, B>(left: &mut A, right: &mut B) -> Result<()>
+async fn copy_bidirectional_tolerant<A, B>(app: &AppHandle, left: &mut A, right: &mut B) -> Result<()>
 where
     A: AsyncRead + AsyncWrite + Unpin,
     B: AsyncRead + AsyncWrite + Unpin,
 {
-    match tokio::io::copy_bidirectional(left, right).await {
-        Ok(_) => Ok(()),
-        Err(error) if is_connection_close(&error) => {
-            tracing::debug!("reverse tunnel bridge closed by peer: {error}");
-            Ok(())
+    let mut left_buf = vec![0u8; 16384];
+    let mut right_buf = vec![0u8; 16384];
+    
+    let (mut left_read, mut left_write) = tokio::io::split(left);
+    let (mut right_read, mut right_write) = tokio::io::split(right);
+    
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tauri::Emitter;
+    
+    let app_clone1 = app.clone();
+    let left_to_right = async move {
+        loop {
+            match left_read.read(&mut left_buf).await {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    let _ = app_clone1.emit("network_stats", serde_json::json!({ "bytesOut": n }));
+                    if let Err(e) = right_write.write_all(&left_buf[..n]).await {
+                        if !is_connection_close(&e) {
+                            return Err(e);
+                        }
+                        break;
+                    }
+                }
+                Err(e) => {
+                    if !is_connection_close(&e) {
+                        return Err(e);
+                    }
+                    break;
+                }
+            }
         }
-        Err(error) => Err(error).context("tokio::io::copy_bidirectional вернул ошибку"),
+        let _ = right_write.shutdown().await;
+        Ok::<_, std::io::Error>(())
+    };
+
+    let app_clone2 = app.clone();
+    let right_to_left = async move {
+        loop {
+            match right_read.read(&mut right_buf).await {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    let _ = app_clone2.emit("network_stats", serde_json::json!({ "bytesIn": n }));
+                    if let Err(e) = left_write.write_all(&right_buf[..n]).await {
+                        if !is_connection_close(&e) {
+                            return Err(e);
+                        }
+                        break;
+                    }
+                }
+                Err(e) => {
+                    if !is_connection_close(&e) {
+                        return Err(e);
+                    }
+                    break;
+                }
+            }
+        }
+        let _ = left_write.shutdown().await;
+        Ok::<_, std::io::Error>(())
+    };
+
+    match tokio::try_join!(left_to_right, right_to_left) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(e.into()),
     }
 }
 

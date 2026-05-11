@@ -25,7 +25,6 @@ const autoDetectPortEl = document.querySelector("#auto-detect-port");
 const enableGeyserEl = document.querySelector("#enable-geyser");
 const geyserPortFieldEl = document.querySelector("#geyser-port-field");
 const geyserPortEl = document.querySelector("#geyser-port");
-const enableE4mcEl = document.querySelector("#enable-e4mc");
 const hostButtonEl = document.querySelector("#host-button");
 const stopButtonEl = document.querySelector("#stop-button");
 const refreshLobbyEl = document.querySelector("#refresh-lobby");
@@ -59,21 +58,19 @@ const sessionModeEl = document.querySelector("#session-mode");
 const hostLockNoteEl = document.querySelector("#host-lock-note");
 const hostSectionTitleEl = document.querySelector("#host-section-title");
 const navHomeEl = document.querySelector("#nav-home");
-const navFriendsEl = document.querySelector("#nav-friends");
 const navSettingsEl = document.querySelector("#nav-settings");
 const pageHomeEl = document.querySelector("#page-home");
-const pageFriendsEl = document.querySelector("#page-friends");
 const pageSettingsEl = document.querySelector("#page-settings");
 const portHelpEl = document.querySelector("#port-help");
 const brandUserNameEl = document.querySelector("#brand-user-name");
 const brandAvatarImageEl = document.querySelector("#brand-avatar-image");
 const brandAvatarFallbackEl = document.querySelector("#brand-avatar-fallback");
-const profileMenuTriggerEl = document.querySelector("#open-own-profile");
-const profileMenuEl = null; // old dropdown removed
-const profileNicknameEl = null;
-const profileAvatarFileEl = null;
-const chooseAvatarEl = null;
-const saveProfileEl = null;
+const profileMenuTriggerEl = document.querySelector("#profile-menu-trigger");
+const profileMenuEl = document.querySelector("#profile-menu");
+const profileNicknameEl = document.querySelector("#profile-nickname");
+const profileAvatarFileEl = document.querySelector("#profile-avatar-file");
+const chooseAvatarEl = document.querySelector("#choose-avatar");
+const saveProfileEl = document.querySelector("#save-profile");
 const settingsVersionEl = document.querySelector("#settings-version");
 const checkUpdatesEl = document.querySelector("#check-updates");
 const installUpdateEl = document.querySelector("#install-update");
@@ -100,7 +97,6 @@ const ignoredPortsListEl = document.querySelector("#ignored-ports-list");
 
 const PROFILE_STORAGE_KEY = "minecraft-p2p-profile-v1";
 const EXTERNAL_SERVERS_STORAGE_KEY = "minecraft-p2p-external-servers-v1";
-const E4MC_FALLBACK_STORAGE_KEY = "minecraft-p2p-enable-e4mc";
 const IGNORED_PORTS_STORAGE_KEY = "minecraft-p2p-ignored-ports-v1";
 const SETTINGS_ACCENT_KEY = "minecraft-p2p-accent";
 
@@ -115,8 +111,6 @@ const hostSession = {
   maxPlayers: 30,
   minecraftVersion: null,
   publicJoinAddress: null,
-  e4mcDomain: null,
-  e4mcVerified: false,
   presencePayload: null,
   presenceEntered: false,
 };
@@ -148,19 +142,11 @@ const state = {
   runtimeFingerprint: null,
   localWorldPlayers: [],
   lastLocalPlayerSyncAt: 0,
-  e4mcEnabled: loadE4mcPreference(),
   ignoredPorts: loadIgnoredPorts(),
   pingHistory: new Map(), // For graph
 };
 
-function loadE4mcPreference() {
-  const value = localStorage.getItem(E4MC_FALLBACK_STORAGE_KEY);
-  return value == null ? true : value === "true";
-}
 
-function saveE4mcPreference(value) {
-  localStorage.setItem(E4MC_FALLBACK_STORAGE_KEY, String(Boolean(value)));
-}
 
 function ensureClientId() {
   const key = "minecraft-p2p-client-id";
@@ -309,13 +295,14 @@ function syncExternalHostMode() {
   passwordFieldGroupEl?.classList.toggle("hidden", external || !requirePasswordEl.checked);
   enableGeyserEl?.closest(".checkbox-row")?.classList.toggle("hidden", external);
   geyserPortFieldEl?.classList.toggle("hidden", external || !enableGeyserEl.checked);
-  enableE4mcEl?.closest(".checkbox-row")?.classList.toggle("hidden", external);
   hostButtonEl.textContent = t(external ? "modalExternalButton" : "modalHostButton");
 }
 
 function renderProfile() {
   const nickname = state.profile.nickname?.trim() || "Player";
   brandUserNameEl.textContent = nickname;
+  if (profileNicknameEl) profileNicknameEl.value = nickname;
+
   if (state.profile.avatarDataUrl) {
     brandAvatarImageEl.src = state.profile.avatarDataUrl;
     brandAvatarImageEl.classList.remove("hidden");
@@ -326,6 +313,58 @@ function renderProfile() {
     brandAvatarFallbackEl.classList.remove("hidden");
     brandAvatarFallbackEl.textContent = nickname.slice(0, 1).toUpperCase();
   }
+}
+
+function toggleProfileMenu(force) {
+  ensureProfileMenuPortal();
+  if (!profileMenuEl) return;
+  const open = typeof force === "boolean" ? force : profileMenuEl.classList.contains("hidden");
+  profileMenuEl.classList.toggle("hidden", !open);
+  if (open) requestAnimationFrame(positionProfileMenu);
+}
+
+function ensureProfileMenuPortal() {
+  if (!profileMenuEl || profileMenuEl.parentElement === document.body) return;
+  document.body.appendChild(profileMenuEl);
+}
+
+function positionProfileMenu() {
+  if (!profileMenuEl || profileMenuEl.classList.contains("hidden") || !profileMenuTriggerEl) return;
+  const triggerRect = profileMenuTriggerEl.getBoundingClientRect();
+  const menuRect = profileMenuEl.getBoundingClientRect();
+  const margin = 8;
+  let left = triggerRect.left;
+  let top = triggerRect.bottom + margin;
+  if (top + menuRect.height > window.innerHeight) top = triggerRect.top - menuRect.height - margin;
+  if (left + menuRect.width > window.innerWidth) left = window.innerWidth - menuRect.width - margin;
+  if (left < 0) left = margin;
+  if (top < 0) top = margin;
+  profileMenuEl.style.left = `${Math.round(left)}px`;
+  profileMenuEl.style.top = `${Math.round(top)}px`;
+}
+
+async function pickAvatarFile() {
+  if (profileAvatarFileEl) profileAvatarFileEl.click();
+}
+
+async function handleAvatarChosen() {
+  const file = profileAvatarFileEl?.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    state.profile.avatarDataUrl = String(reader.result || "");
+    renderProfile();
+  };
+  reader.readAsDataURL(file);
+}
+
+function saveProfileFromInputs() {
+  if (!profileNicknameEl) return;
+  state.profile.nickname = profileNicknameEl.value.trim() || "Player";
+  saveProfileState();
+  renderProfile();
+  addLog(t("profileSaved"));
+  toggleProfileMenu(false);
 }
 
 async function detectMinecraftNickname() {
@@ -522,12 +561,9 @@ function applyLanguage(language) {
 function setPage(page) {
   state.page = page;
   pageHomeEl.classList.toggle("page-active", page === "home");
-  pageFriendsEl?.classList.toggle("page-active", page === "friends");
   pageSettingsEl.classList.toggle("page-active", page === "settings");
   navHomeEl.classList.toggle("nav-button-active", page === "home");
-  navFriendsEl?.classList.toggle("nav-button-active", page === "friends");
   navSettingsEl.classList.toggle("nav-button-active", page === "settings");
-  if (page === "friends") initFriendsPage();
 }
 
 async function loadAppInfo() {
@@ -608,7 +644,6 @@ function syncPasswordField() {
 
 function openModal() {
   if (!canOpenHostModal()) return;
-  if (enableE4mcEl) enableE4mcEl.checked = Boolean(state.e4mcEnabled);
   modalEl.classList.remove("hidden");
   modalEl.setAttribute("aria-hidden", "false");
   void autofillRoomNameFromLocalServer();
@@ -653,7 +688,6 @@ function formatTransportLabel(transport) {
   if (transport === "relay-circuit" || transport === "relay-reservation") return "Circuit Relay v2";
   if (transport === "direct-hole-punch") return "DCUtR hole punch";
   if (transport === "direct" || transport === "direct-quic") return "Direct libp2p";
-  if (transport === "e4mc-public") return "e4mc";
   return transport ?? "unknown transport";
 }
 
@@ -715,7 +749,7 @@ function buildInferredPlayers(peers) {
       addr: "minecraft-status",
       connected: true,
       pingMs: null,
-      transport: state.status?.e4mcDomain ? "e4mc-public" : "unknown transport",
+      transport: "unknown transport",
       inferred: true,
       inferredName: name,
     }));
@@ -844,19 +878,10 @@ function canAdvertiseHost() {
   );
 }
 
-function isE4mcVerified(status = state.status) {
-  return Boolean(status?.e4mcVerified ?? hostSession.e4mcVerified);
-}
 
-function getVisibleE4mcDomain(status = state.status) {
-  return hostSession.e4mcDomain ?? status?.e4mcDomain ?? null;
-}
 
 function getVerifiedPublicJoinAddress(status = state.status) {
-  if (!isE4mcVerified(status)) {
-    return status?.publicJoinAddress ?? hostSession.publicJoinAddress ?? null;
-  }
-  return hostSession.publicJoinAddress ?? status?.publicJoinAddress ?? getVisibleE4mcDomain(status) ?? null;
+  return hostSession.publicJoinAddress ?? status?.publicJoinAddress ?? null;
 }
 
 function getDirectAdvertisedEndpoint(status = state.status) {
@@ -871,8 +896,7 @@ function getAdvertisableJoinAddress(status = state.status) {
 function formatPrimaryEndpoint(status = state.status) {
   const endpoint = getAdvertisableJoinAddress(status);
   if (endpoint) return endpoint;
-  const domain = getVisibleE4mcDomain(status);
-  if (domain) return `${domain} (${t("e4mcPendingShort")})`;
+  
   return status?.publicUdpAddr ?? status?.udpBindAddr ?? "n/a";
 }
 
@@ -949,29 +973,48 @@ function renderSessionCard() {
   const hostBedrockEndpoint = deriveBedrockEndpoint(status?.publicUdpAddr, status?.bedrockPort);
   const online = Math.max(1, (status?.peerCount ?? 0) + 1);
   const maxPlayers = Math.max(online, hostSession.maxPlayers ?? 30);
-  const e4mcDomain = getVisibleE4mcDomain(status);
-  const e4mcLabel = e4mcDomain
-    ? isE4mcVerified(status)
-      ? t("hostCardE4mcReady", { domain: e4mcDomain })
-      : t("hostCardE4mcPending", { domain: e4mcDomain })
-    : null;
+  const e4mcLabel = null;
 
   if (mode === "client") {
     hostSectionTitleEl.textContent = t("clientSessionTitle");
     activeHostCardEl.className = "active-host-card";
-    activeHostCardEl.innerHTML = `
-    <div class="active-host-layout">
-      <div class="host-avatar">⇄</div>
-      <div class="host-details">
-        <h3>${escapeHtml(t("clientCardTitle"))}</h3>
-          <p>${escapeHtml(t("clientCardDescription", { peer: status?.peers?.[0]?.addr ?? "n/a" }))}</p>
-          <div class="host-meta-row">
-            <span class="host-meta-pill">${escapeHtml(t("clientCardReady"))}</span>
+    
+    // We get the local address from the tunnel, but typically it's localhost:25565
+    // and is stored in hint or can just be written
+    const isReady = state.tunnelReady || status?.state === "connected";
+    
+    if (isReady) {
+      activeHostCardEl.innerHTML = `
+      <div class="active-host-layout" style="background: rgba(0, 255, 0, 0.1); border: 1px solid var(--accent); padding: 16px; border-radius: 8px;">
+        <div class="host-avatar" style="background: var(--accent); color: white;">✅</div>
+        <div class="host-details">
+          <h3 style="margin-top: 0; color: var(--accent);">Вы успешно подключены к другу!</h3>
+          <p style="margin-bottom: 12px;">Заходите в Minecraft и подключайтесь по этому адресу:</p>
+          <div class="ip-box" style="display: flex; gap: 8px; align-items: center; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px;">
+              <strong style="font-size: 1.2em; font-family: monospace; user-select: all;">127.0.0.1:25565</strong>
+              <button onclick="navigator.clipboard.writeText('127.0.0.1:25565')" class="ghost-button">📋 Копировать</button>
+          </div>
+          <div class="host-meta-row" style="margin-top: 12px;">
             <span class="host-meta-pill">${escapeHtml(status?.peers?.[0]?.pingMs == null ? "Ping: n/a" : `Ping: ${status.peers[0].pingMs} ms`)}</span>
           </div>
         </div>
       </div>
-    `;
+      `;
+    } else {
+      activeHostCardEl.innerHTML = `
+      <div class="active-host-layout">
+        <div class="host-avatar">⇄</div>
+        <div class="host-details">
+          <h3>${escapeHtml(t("clientCardTitle"))}</h3>
+            <p>${escapeHtml(t("clientCardDescription", { peer: status?.peers?.[0]?.addr ?? "n/a" }))}</p>
+            <div class="host-meta-row">
+              <span class="host-meta-pill">${escapeHtml(t("clientCardReady"))}</span>
+              <span class="host-meta-pill">${escapeHtml(status?.peers?.[0]?.pingMs == null ? "Ping: n/a" : `Ping: ${status.peers[0].pingMs} ms`)}</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
     return;
   }
 
@@ -1001,11 +1044,6 @@ function renderSessionCard() {
           <span class="host-meta-pill">${escapeHtml(t("hostCardVersion", { version }))}</span>
           <span class="host-meta-pill">${escapeHtml(t("hostCardPort", { port: hostSession.localPort }))}</span>
           <span class="host-meta-pill">${escapeHtml(hostSession.hasPassword ? t("hostCardPasswordOn") : t("hostCardPasswordOff"))}</span>
-          ${
-            e4mcLabel
-              ? `<span class="host-meta-pill">${escapeHtml(e4mcLabel)}</span>`
-              : ""
-          }
           ${
             status?.geyserEnabled && hostBedrockEndpoint
               ? `<span class="host-meta-pill">${escapeHtml(t("hostCardGeyser", { endpoint: hostBedrockEndpoint }))}</span>`
@@ -1309,7 +1347,6 @@ function hydrateServers(members) {
         Array.isArray(data.listen_addrs) ? data.listen_addrs.map(normalizeToMultiaddr).filter(Boolean) : [],
       );
       const endpoint = normalizeToMultiaddr(data.endpoint) ?? advertisedEndpoint(peerAddrs);
-      const e4mcVerified = Boolean(data.e4mc_verified ?? (data.e4mc_domain && data.public_join_address === data.e4mc_domain));
       return {
         clientId: member.clientId,
         roomName: data.room_name ?? "Unnamed room",
@@ -1323,8 +1360,6 @@ function hydrateServers(members) {
         minecraftVersion: data.minecraft_version ?? null,
         transport: data.transport ?? null,
         publicJoinAddress: data.public_join_address ?? data.socket_endpoint ?? null,
-        e4mcDomain: e4mcVerified ? data.e4mc_domain ?? null : null,
-        e4mcVerified,
         geyserEnabled: Boolean(data.geyser_enabled),
         bedrockPort: data.bedrock_port ?? null,
         bedrockEndpoint: data.bedrock_endpoint ?? null,
@@ -1429,9 +1464,7 @@ async function addExternalServerFromModal(roomName) {
 function buildPresencePayload(status) {
   const endpoint = advertisedEndpoint(hostSession.listenAddrs, hostSession.peerAddr);
   const socketEndpoint = toSocketEndpoint(endpoint);
-  const e4mcVerified = isE4mcVerified(status);
   const publicJoinAddress = getAdvertisableJoinAddress(status);
-  const e4mcDomain = e4mcVerified ? getVisibleE4mcDomain(status) : null;
   const online = Math.max(1, (status?.peerCount ?? 0) + 1);
   const maxPlayers = Math.max(online, hostSession.maxPlayers ?? 30);
   return {
@@ -1448,8 +1481,6 @@ function buildPresencePayload(status) {
     endpoint,
     socket_endpoint: socketEndpoint,
     public_join_address: publicJoinAddress,
-    e4mc_domain: e4mcDomain,
-    e4mc_verified: e4mcVerified,
     peer_addr: hostSession.peerAddr,
     local_port: hostSession.localPort,
     minecraft_version: hostSession.minecraftVersion ?? status?.minecraftVersion ?? null,
@@ -1470,8 +1501,6 @@ function syncHostSessionFromStatus(status) {
     hostSession.localPort = status.localGamePort ?? hostSession.localPort;
     hostSession.minecraftVersion = status.minecraftVersion ?? hostSession.minecraftVersion;
     hostSession.publicJoinAddress = status.publicJoinAddress ?? null;
-    hostSession.e4mcDomain = status.e4mcDomain ?? null;
-    hostSession.e4mcVerified = Boolean(status.e4mcVerified);
     return;
   }
   hostSession.active = false;
@@ -1480,8 +1509,6 @@ function syncHostSessionFromStatus(status) {
   hostSession.peerAddr = null;
   hostSession.minecraftVersion = null;
   hostSession.publicJoinAddress = null;
-  hostSession.e4mcDomain = null;
-  hostSession.e4mcVerified = false;
   hostSession.presenceEntered = false;
 }
 
@@ -1822,8 +1849,6 @@ async function startHosting() {
   const localPort = Number(localGamePortEl.value || 25565);
   const password = requirePasswordEl.checked ? roomPasswordEl.value.trim() || null : null;
   const enableGeyser = Boolean(enableGeyserEl.checked);
-  state.e4mcEnabled = Boolean(enableE4mcEl?.checked);
-  saveE4mcPreference(state.e4mcEnabled);
   const geyserPort = Number(geyserPortEl.value || 19132);
   hostButtonEl.disabled = true;
   state.tunnelReady = false;
@@ -1841,7 +1866,6 @@ async function startHosting() {
       localPort,
       enableGeyser,
       geyserPort,
-      enableE4mc: state.e4mcEnabled,
     });
     const status = await waitForStatus(
       (snapshot) => snapshot.mode === "host" && ["waitingForPeer", "hosting", "connected", "error"].includes(snapshot.state),
@@ -1857,8 +1881,6 @@ async function startHosting() {
     hostSession.localPort = localPort;
     hostSession.minecraftVersion = status.minecraftVersion ?? null;
     hostSession.publicJoinAddress = status.publicJoinAddress ?? null;
-    hostSession.e4mcDomain = status.e4mcDomain ?? null;
-    hostSession.e4mcVerified = Boolean(status.e4mcVerified);
     try {
       const localMeta = await invoke("query_external_server", { host: "127.0.0.1", port: localPort });
       if (localMeta?.roomName) {
@@ -1879,8 +1901,12 @@ async function startHosting() {
       addLog("Presence delayed: waiting for public endpoint.");
     }
     await refreshLobby();
+    hostButtonEl.textContent = '✅ Сервер работает';
+    hostButtonEl.classList.remove('loading-opacity');
     closeModal();
   } catch (error) {
+    hostButtonEl.textContent = originalHostText;
+    hostButtonEl.classList.remove('loading-opacity');
     addLog(t("hostStartFailed", { error: String(error) }));
   } finally {
     syncButtons();
@@ -1911,8 +1937,6 @@ async function stopSession() {
     hostSession.maxPlayers = 30;
     hostSession.minecraftVersion = null;
     hostSession.publicJoinAddress = null;
-    hostSession.e4mcDomain = null;
-    hostSession.e4mcVerified = false;
     hostSession.presencePayload = null;
     hostSession.presenceEntered = false;
     state.selectedServerId = null;
@@ -2143,25 +2167,7 @@ await listen("hole_punch_success", async (event) => {
   addLog(`Hole punch success for ${event.payload?.peerId ?? "peer"}.`);
 });
 
-await listen("e4mc_domain_ready", async (event) => {
-  const domain = String(event.payload?.domain ?? "").trim();
-  if (!domain) return;
-  hostSession.e4mcDomain = domain;
-  hostSession.e4mcVerified = Boolean(event.payload?.verified);
-  hostSession.publicJoinAddress = hostSession.e4mcVerified ? domain : null;
-  addLog(
-    hostSession.e4mcVerified
-      ? t("e4mcVerifiedLog", { domain })
-      : t("e4mcPendingLog", { domain, error: String(event.payload?.error ?? "verification pending") }),
-  );
-  const status = await invoke("get_status");
-  renderStatus(status);
-  await syncPresence(status, { force: true, enter: !hostSession.presenceEntered });
-  await refreshLobby();
-});
-
 navHomeEl.addEventListener("click", () => setPage("home"));
-navFriendsEl?.addEventListener("click", () => setPage("friends"));
 navSettingsEl.addEventListener("click", () => setPage("settings"));
 openHostModalEl.addEventListener("click", openModal);
 closeModalEl.addEventListener("click", closeModal);
@@ -2233,9 +2239,6 @@ probeTestServerEl.addEventListener("click", async () => {
 connectSelectedEl.addEventListener("click", async () => {
   const selected = getSelectedServer();
   if (selected) await connectToServer(selected);
-});
-profileMenuTriggerEl?.addEventListener("click", () => {
-  openOwnProfile();
 });
 checkUpdatesEl.addEventListener("click", checkForUpdates);
 installUpdateEl.addEventListener("click", installUpdate);
@@ -2371,862 +2374,138 @@ await detectRuntimeFingerprint();
 await setupAbly();
 await pollStatus();
 
-// ═══════════════════════════════════════════════════════════════════════
-//  FRIENDS SYSTEM
-// ═══════════════════════════════════════════════════════════════════════
 
-const FRIENDS_SERVER_KEY = "minecraft-p2p-friends-server";
-const FRIENDS_DEVICE_KEY = "minecraft-p2p-device-id";
 
-const friendsState = {
-  serverUrl: localStorage.getItem(FRIENDS_SERVER_KEY) || "",
-  deviceId: localStorage.getItem(FRIENDS_DEVICE_KEY) || generateDeviceId(),
-  ws: null,
-  user: null,
-  friends: [],
-  pendingRequests: [],
-  connected: false,
-  initialized: false,
-};
-
-if (!localStorage.getItem(FRIENDS_DEVICE_KEY)) {
-  localStorage.setItem(FRIENDS_DEVICE_KEY, friendsState.deviceId);
-}
-
-function generateDeviceId() {
-  return "dev-" + crypto.randomUUID();
-}
-
-function friendsApiUrl(path) {
-  const base = friendsState.serverUrl.replace(/\/+$/, "");
-  return `${base}${path}`;
-}
-
-function friendsHeaders() {
-  return {
-    "Content-Type": "application/json",
-    "X-Device-Id": friendsState.deviceId,
-  };
-}
-
-let friendsInitDone = false;
-function initFriendsPage() {
-  if (!friendsState.serverUrl) {
-    renderFriendsEmpty();
-    return;
+profileMenuTriggerEl?.addEventListener("click", () => toggleProfileMenu());
+chooseAvatarEl?.addEventListener("click", pickAvatarFile);
+profileAvatarFileEl?.addEventListener("change", handleAvatarChosen);
+saveProfileEl?.addEventListener("click", saveProfileFromInputs);
+document.addEventListener("click", (e) => {
+  if (profileMenuEl && !profileMenuEl.classList.contains("hidden") && !profileMenuEl.contains(e.target) && (!profileMenuTriggerEl || !profileMenuTriggerEl.contains(e.target))) {
+    toggleProfileMenu(false);
   }
-  if (!friendsInitDone) {
-    friendsInitDone = true;
-    connectFriendsWs();
+});
+
+
+// Network Stats Graph
+const networkGraphCanvas = document.querySelector("#network-stats-graph");
+const networkGraphCtx = networkGraphCanvas?.getContext("2d");
+const networkStatsDownEl = document.querySelector("#network-stats-down");
+const networkStatsUpEl = document.querySelector("#network-stats-up");
+
+let statsHistoryIn = [];
+let statsHistoryOut = [];
+let currentBytesIn = 0;
+let currentBytesOut = 0;
+
+setInterval(() => {
+  statsHistoryIn.push(currentBytesIn);
+  statsHistoryOut.push(currentBytesOut);
+  if (statsHistoryIn.length > 60) statsHistoryIn.shift();
+  if (statsHistoryOut.length > 60) statsHistoryOut.shift();
+  
+  if (networkStatsDownEl && networkStatsUpEl) {
+    networkStatsDownEl.textContent = `D: ${(currentBytesIn / 1024).toFixed(1)} KB/s`;
+    networkStatsUpEl.textContent = `U: ${(currentBytesOut / 1024).toFixed(1)} KB/s`;
   }
-  renderFriendsList();
+  
+  currentBytesIn = 0;
+  currentBytesOut = 0;
+  
+  if (networkGraphCtx && networkGraphCanvas) {
+    networkGraphCanvas.width = networkGraphCanvas.offsetWidth * window.devicePixelRatio;
+    networkGraphCanvas.height = networkGraphCanvas.offsetHeight * window.devicePixelRatio;
+    
+    const w = networkGraphCanvas.width;
+    const h = networkGraphCanvas.height;
+    networkGraphCtx.clearRect(0, 0, w, h);
+    
+    const maxVal = Math.max(...statsHistoryIn, ...statsHistoryOut, 1024);
+    
+    // Draw In
+    networkGraphCtx.beginPath();
+    networkGraphCtx.strokeStyle = "rgba(46, 204, 113, 0.8)";
+    networkGraphCtx.lineWidth = 2 * window.devicePixelRatio;
+    for (let i = 0; i < statsHistoryIn.length; i++) {
+        const x = (i / 60) * w;
+        const y = h - (statsHistoryIn[i] / maxVal) * h;
+        if (i === 0) networkGraphCtx.moveTo(x, y);
+        else networkGraphCtx.lineTo(x, y);
+    }
+    networkGraphCtx.stroke();
+    
+    // Draw Out
+    networkGraphCtx.beginPath();
+    networkGraphCtx.strokeStyle = "rgba(52, 152, 219, 0.8)";
+    networkGraphCtx.lineWidth = 2 * window.devicePixelRatio;
+    for (let i = 0; i < statsHistoryOut.length; i++) {
+        const x = (i / 60) * w;
+        const y = h - (statsHistoryOut[i] / maxVal) * h;
+        if (i === 0) networkGraphCtx.moveTo(x, y);
+        else networkGraphCtx.lineTo(x, y);
+    }
+    networkGraphCtx.stroke();
+  }
+}, 1000);
+
+
+// Host Profiles
+const hostProfileSelect = document.querySelector("#host-profile-select");
+const saveHostProfileBtn = document.querySelector("#save-host-profile");
+
+function loadHostProfiles() {
+    try {
+        return JSON.parse(localStorage.getItem("host_profiles") || "{}");
+    } catch { return {}; }
+}
+function saveHostProfiles(profiles) {
+    localStorage.setItem("host_profiles", JSON.stringify(profiles));
+}
+function updateProfileSelect() {
+    if (!hostProfileSelect) return;
+    const profiles = loadHostProfiles();
+    const currentVal = hostProfileSelect.value;
+    hostProfileSelect.innerHTML = '<option value="">По умолчанию</option>';
+    for (const name of Object.keys(profiles)) {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        hostProfileSelect.appendChild(opt);
+    }
+    hostProfileSelect.value = profiles[currentVal] ? currentVal : "";
 }
 
-function renderFriendsEmpty() {
-  const onlineEl = document.querySelector("#friends-online-list");
-  const allEl = document.querySelector("#friends-all-list");
-  const reqEl = document.querySelector("#friends-requests-list");
-  const hostingEl = document.querySelector("#friends-hosting-list");
-  if (onlineEl) onlineEl.innerHTML = `<div class="empty-state">${escapeHtml(t("friendsSetupServer"))}</div>`;
-  if (allEl) allEl.innerHTML = "";
-  if (reqEl) reqEl.innerHTML = "";
-  if (hostingEl) hostingEl.innerHTML = `<div class="empty-state">${escapeHtml(t("friendsNoHosting"))}</div>`;
-}
+hostProfileSelect?.addEventListener("change", () => {
+    const val = hostProfileSelect.value;
+    if (!val) return;
+    const profiles = loadHostProfiles();
+    const p = profiles[val];
+    if (p) {
+        if (hostRoomNameEl) hostRoomNameEl.value = p.roomName || "";
+        if (hostPasswordEl) hostPasswordEl.value = p.password || "";
+        if (hostPortEl) hostPortEl.value = p.port || "";
+        if (hostBedrockEnabledEl) hostBedrockEnabledEl.checked = Boolean(p.bedrock);
+        if (hostBedrockPortEl) hostBedrockPortEl.value = p.bedrockPort || "";
+        saveHostState();
+    }
+});
 
-async function connectFriendsWs() {
-  if (!friendsState.serverUrl) return;
-  if (friendsState.ws) {
-    friendsState.ws.close();
-    friendsState.ws = null;
-  }
-
-  try {
-    const wsUrl = friendsState.serverUrl.replace(/^http/, "ws").replace(/\/+$/, "") + `/ws?deviceId=${encodeURIComponent(friendsState.deviceId)}`;
-    const ws = new WebSocket(wsUrl);
-    friendsState.ws = ws;
-
-    ws.onopen = () => {
-      friendsState.connected = true;
-      addLog("[Friends] WebSocket connected");
+saveHostProfileBtn?.addEventListener("click", () => {
+    const name = prompt("Введите имя профиля:");
+    if (!name) return;
+    const profiles = loadHostProfiles();
+    profiles[name] = {
+        roomName: hostRoomNameEl?.value || "",
+        password: hostPasswordEl?.value || "",
+        port: hostPortEl?.value || "",
+        bedrock: hostBedrockEnabledEl?.checked || false,
+        bedrockPort: hostBedrockPortEl?.value || ""
     };
-
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        handleFriendsMessage(msg);
-      } catch { /* ignore */ }
-    };
-
-    ws.onclose = () => {
-      friendsState.connected = false;
-      // Reconnect after 5s
-      setTimeout(() => {
-        if (friendsState.serverUrl) connectFriendsWs();
-      }, 5000);
-    };
-
-    ws.onerror = () => {
-      addLog("[Friends] WebSocket error — check server URL");
-    };
-  } catch (e) {
-    addLog(`[Friends] Connection failed: ${e.message}`);
-  }
-}
-
-function handleFriendsMessage(msg) {
-  switch (msg.type) {
-    case "init":
-      friendsState.user = msg.user;
-      friendsState.friends = msg.friends || [];
-      friendsState.pendingRequests = msg.pendingRequests || [];
-      document.querySelector("#my-friend-code").textContent = msg.user?.friend_code || "----";
-      updateSidebarAvatar(msg.user);
-      renderFriendsList();
-      break;
-
-    case "presence":
-      // Update friend's presence in local state
-      const f = friendsState.friends.find((f) => f.id === msg.userId);
-      if (f) {
-        f.online = msg.online ? 1 : 0;
-        f.hosting = msg.hosting ? 1 : 0;
-        f.host_data = msg.hostData ? JSON.stringify(msg.hostData) : null;
-        renderFriendsList();
-      }
-      break;
-
-    case "friend_request":
-      friendsState.pendingRequests.push({
-        id: msg.from.id,
-        nickname: msg.from.nickname,
-        friend_code: msg.from.friendCode,
-        friendship_id: msg.friendshipId,
-      });
-      renderFriendsList();
-      addLog(`[Friends] ${msg.from.nickname} wants to be your friend!`);
-      break;
-
-    case "friend_accepted":
-      addLog(`[Friends] ${msg.by.nickname} accepted your friend request!`);
-      refreshFriendsList();
-      break;
-
-    case "pong":
-      break;
-  }
-}
-
-function renderFriendsList() {
-  const onlineEl = document.querySelector("#friends-online-list");
-  const allEl = document.querySelector("#friends-all-list");
-  const reqEl = document.querySelector("#friends-requests-list");
-  const hostingEl = document.querySelector("#friends-hosting-list");
-
-  const accepted = friendsState.friends.filter((f) => f.status === "accepted");
-  const online = accepted.filter((f) => f.online);
-  const hosting = accepted.filter((f) => f.hosting && f.host_data);
-
-  // Online friends
-  if (onlineEl) {
-    if (!online.length) {
-      onlineEl.innerHTML = `<div class="empty-state">${escapeHtml(t("friendsNoneOnline"))}</div>`;
-    } else {
-      onlineEl.innerHTML = online.map((f) => renderFriendCard(f, true)).join("");
-    }
-  }
-
-  // All friends
-  if (allEl) {
-    if (!accepted.length) {
-      allEl.innerHTML = `<div class="empty-state">${escapeHtml(t("friendsNone"))}</div>`;
-    } else {
-      allEl.innerHTML = accepted.map((f) => renderFriendCard(f, false)).join("");
-    }
-  }
-
-  // Pending requests
-  if (reqEl) {
-    if (!friendsState.pendingRequests.length) {
-      reqEl.innerHTML = `<div class="empty-state">${escapeHtml(t("friendsNoRequests"))}</div>`;
-    } else {
-      reqEl.innerHTML = friendsState.pendingRequests.map((r) => `
-        <div class="friend-card friend-request-card">
-          ${renderAvatarEl(r, 38)}
-          <div class="friend-info">
-            <strong>${escapeHtml(r.nickname)}</strong>
-            <span class="friend-code-small">${escapeHtml(r.friend_code || "")}</span>
-          </div>
-          <div class="friend-actions">
-            <button class="primary-button compact" onclick="acceptFriendRequest('${escapeHtml(r.friendship_id)}')">${escapeHtml(t("friendsAccept"))}</button>
-            <button class="ghost-button compact danger-button" onclick="rejectFriendRequest('${escapeHtml(r.friendship_id)}')">${escapeHtml(t("friendsReject"))}</button>
-          </div>
-        </div>
-      `).join("");
-    }
-  }
-
-  // Hosting friends
-  if (hostingEl) {
-    if (!hosting.length) {
-      hostingEl.innerHTML = `<div class="empty-state">${escapeHtml(t("friendsNoHosting"))}</div>`;
-    } else {
-      hostingEl.innerHTML = hosting.map((f) => {
-        let hostData = {};
-        try { hostData = JSON.parse(f.host_data); } catch {}
-        return `
-          <div class="friend-card friend-hosting-card">
-            <div class="friend-avatar hosting-glow" style="cursor:pointer" onclick="openUserProfile('${escapeHtml(f.id)}')">
-              ${f.avatar_url ? `<img src="${escapeHtml(f.avatar_url)}" alt="${escapeHtml(f.nickname)}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit"/>` : escapeHtml((f.nickname || "?")[0].toUpperCase())}
-            </div>
-            <div class="friend-info" style="cursor:pointer" onclick="openUserProfile('${escapeHtml(f.id)}')">
-              <strong>${escapeHtml(f.nickname)}</strong>
-              <span class="host-room-name">${escapeHtml(hostData.roomName || "Unnamed")}</span>
-              <span class="host-meta-small">${escapeHtml(hostData.version || "")} · ${hostData.online || 0}/${hostData.maxPlayers || 0}</span>
-            </div>
-            <div class="friend-actions">
-              <button class="primary-button compact" onclick="joinFriendHost('${escapeHtml(f.id)}')">${escapeHtml(t("connectButton"))}</button>
-            </div>
-          </div>
-        `;
-      }).join("");
-    }
-  }
-
-  // Update badge counts
-  const reqCount = friendsState.pendingRequests.length;
-  const onlineCountEl = document.querySelector("#friends-online-count");
-  const allCountEl = document.querySelector("#friends-all-count");
-  const reqCountEl = document.querySelector("#friends-req-count");
-  if (onlineCountEl) onlineCountEl.textContent = online.length;
-  if (allCountEl) allCountEl.textContent = accepted.length;
-  if (reqCountEl) {
-    reqCountEl.textContent = reqCount;
-    reqCountEl.style.display = reqCount ? "" : "none";
-  }
-}
-
-function renderFriendCard(f, showPresence) {
-  const isOnline = f.online;
-  const isHosting = f.hosting;
-  const statusClass = isHosting ? "status-hosting" : isOnline ? "status-online" : "status-offline";
-  const statusText = isHosting ? t("friendsHosting") : isOnline ? t("friendsOnlineStatus") : t("friendsOffline");
-
-  return `
-    <div class="friend-card" style="cursor:pointer" onclick="openUserProfile('${escapeHtml(f.id)}')">
-      ${renderAvatarEl(f, 38)}
-      <div class="friend-info">
-        <strong>${escapeHtml(f.nickname)}</strong>
-        ${showPresence ? `<span class="friend-status ${statusClass}">${escapeHtml(statusText)}</span>` : `<span class="friend-code-small">${escapeHtml(f.friend_code || "")}</span>`}
-      </div>
-      <div class="friend-actions" onclick="event.stopPropagation()">
-        <button class="ghost-button compact danger-button" onclick="removeFriend('${escapeHtml(f.friendship_id)}')" title="${escapeHtml(t("friendsRemove"))}">✕</button>
-      </div>
-    </div>
-  `;
-}
-
-async function joinFriendHost(userId) {
-  const f = friendsState.friends.find((f) => f.id === userId);
-  if (!f || !f.host_data) {
-    addLog("[Friends] Friend is not hosting or host data is missing");
-    return;
-  }
-  try {
-    const hostData = JSON.parse(f.host_data);
-    if (!hostData.publicAddr) {
-      addLog("[Friends] Host address is missing");
-      return;
-    }
-    addLog(`[Friends] Joining ${f.nickname}'s room: ${hostData.roomName || "Unnamed"}...`);
-    // Here we use the existing join_room_command or direct connection logic
-    // For simplicity, we'll try to use the join logic from Home page
-    await joinRoomByAddr(hostData.publicAddr, hostData.password || "");
-  } catch (e) {
-    addLog(`[Friends] Failed to join: ${e.message}`);
-  }
-}
-
-async function refreshFriendsList() {
-  if (!friendsState.serverUrl) return;
-  try {
-    const res = await fetch(friendsApiUrl("/api/friends"), { headers: friendsHeaders() });
-    const data = await res.json();
-    friendsState.friends = data.friends || [];
-    friendsState.pendingRequests = data.pendingRequests || [];
-    renderFriendsList();
-  } catch (e) {
-    addLog(`[Friends] Refresh failed: ${e.message}`);
-  }
-}
-
-// Global functions for onclick handlers
-window.acceptFriendRequest = async function (friendshipId) {
-  try {
-    await fetch(friendsApiUrl("/api/friends/accept"), {
-      method: "POST",
-      headers: friendsHeaders(),
-      body: JSON.stringify({ friendshipId }),
-    });
-    friendsState.pendingRequests = friendsState.pendingRequests.filter((r) => r.friendship_id !== friendshipId);
-    await refreshFriendsList();
-    addLog(t("friendsAccepted"));
-  } catch (e) {
-    addLog(`[Friends] Error: ${e.message}`);
-  }
-};
-
-window.rejectFriendRequest = async function (friendshipId) {
-  try {
-    await fetch(friendsApiUrl(`/api/friends/${friendshipId}`), {
-      method: "DELETE",
-      headers: friendsHeaders(),
-    });
-    friendsState.pendingRequests = friendsState.pendingRequests.filter((r) => r.friendship_id !== friendshipId);
-    renderFriendsList();
-  } catch (e) {
-    addLog(`[Friends] Error: ${e.message}`);
-  }
-};
-
-window.removeFriend = async function (friendshipId) {
-  try {
-    await fetch(friendsApiUrl(`/api/friends/${friendshipId}`), {
-      method: "DELETE",
-      headers: friendsHeaders(),
-    });
-    await refreshFriendsList();
-  } catch (e) {
-    addLog(`[Friends] Error: ${e.message}`);
-  }
-};
-
-window.joinFriendHost = async function (friendId) {
-  const f = friendsState.friends.find((f) => f.id === friendId);
-  if (!f?.host_data) return;
-  let hostData = {};
-  try { hostData = JSON.parse(f.host_data); } catch { return; }
-  if (!hostData.publicAddr) { addLog("[Friends] Host address not available"); return; }
-  addLog(`[Friends] Connecting to ${f.nickname}'s server...`);
-  // TODO: invoke connect_to_peer with hostData.publicAddr
-};
-
-// Send presence heartbeat when hosting
-function sendFriendsHeartbeat() {
-  if (!friendsState.ws || friendsState.ws.readyState !== 1) return;
-  const isHosting = hostSession.active;
-  const heartbeat = {
-    type: "heartbeat",
-    hosting: isHosting,
-  };
-  if (isHosting) {
-    heartbeat.hostData = {
-      roomName: hostSession.roomName,
-      publicAddr: state.status?.publicJoinAddress || state.status?.publicUdpAddr || "",
-      version: state.status?.minecraftVersion || "",
-      online: state.status?.peerCount || 0,
-      maxPlayers: 20,
-    };
-  }
-  friendsState.ws.send(JSON.stringify(heartbeat));
-}
-
-setInterval(sendFriendsHeartbeat, 10000);
-
-// Add friend modal
-const addFriendModal = document.querySelector("#add-friend-modal");
-const addFriendBtn = document.querySelector("#add-friend-btn");
-const closeAddFriendEl = document.querySelector("#close-add-friend");
-const cancelAddFriendEl = document.querySelector("#cancel-add-friend");
-const confirmAddFriendEl = document.querySelector("#confirm-add-friend");
-const addFriendCodeEl = document.querySelector("#add-friend-code");
-const addFriendErrorEl = document.querySelector("#add-friend-error");
-
-function openAddFriendModal() {
-  if (!addFriendModal) return;
-  addFriendModal.classList.remove("hidden");
-  addFriendModal.setAttribute("aria-hidden", "false");
-  addFriendCodeEl.value = "";
-  addFriendErrorEl.classList.add("hidden");
-  addFriendCodeEl.focus();
-}
-
-function closeAddFriendModal() {
-  if (!addFriendModal) return;
-  addFriendModal.classList.add("hidden");
-  addFriendModal.setAttribute("aria-hidden", "true");
-}
-
-addFriendBtn?.addEventListener("click", openAddFriendModal);
-closeAddFriendEl?.addEventListener("click", closeAddFriendModal);
-cancelAddFriendEl?.addEventListener("click", closeAddFriendModal);
-addFriendModal?.addEventListener("click", (e) => {
-  if (e.target instanceof HTMLElement && e.target.dataset.closeAddFriend === "true") closeAddFriendModal();
+    saveHostProfiles(profiles);
+    updateProfileSelect();
+    hostProfileSelect.value = name;
+    addLog("Профиль сохранен: " + name);
 });
 
-confirmAddFriendEl?.addEventListener("click", async () => {
-  const code = addFriendCodeEl?.value?.trim().toUpperCase();
-  if (!code || code.length < 4) {
-    addFriendErrorEl.textContent = t("friendsInvalidCode");
-    addFriendErrorEl.classList.remove("hidden");
-    return;
-  }
-  try {
-    const res = await fetch(friendsApiUrl("/api/friends/add"), {
-      method: "POST",
-      headers: friendsHeaders(),
-      body: JSON.stringify({ friendCode: code }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      addFriendErrorEl.textContent = data.error || "Error";
-      addFriendErrorEl.classList.remove("hidden");
-      return;
-    }
-    addLog(t("friendsRequestSent"));
-    closeAddFriendModal();
-  } catch (e) {
-    addFriendErrorEl.textContent = e.message;
-    addFriendErrorEl.classList.remove("hidden");
-  }
-});
-
-// Copy friend code
-document.querySelector("#copy-friend-code")?.addEventListener("click", async () => {
-  const code = document.querySelector("#my-friend-code")?.textContent;
-  if (code && code !== "----") {
-    await navigator.clipboard.writeText(code);
-    addLog(t("copiedFriendCode"));
-  }
-});
-
-// Save friends server URL
-document.querySelector("#save-friends-server")?.addEventListener("click", () => {
-  const url = document.querySelector("#friends-server-url")?.value?.trim();
-  if (url) {
-    friendsState.serverUrl = url;
-    localStorage.setItem(FRIENDS_SERVER_KEY, url);
-    friendsInitDone = false;
-    initFriendsPage();
-    addLog(`[Friends] Server URL saved: ${url}`);
-  }
-});
-
-// Restore saved server URL
-const savedFriendsUrl = localStorage.getItem(FRIENDS_SERVER_KEY);
-if (savedFriendsUrl) {
-  const urlInput = document.querySelector("#friends-server-url");
-  if (urlInput) urlInput.value = savedFriendsUrl;
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  NAT TYPE DETECTION UI
-// ═══════════════════════════════════════════════════════════════════════
-
-document.querySelector("#run-nat-test")?.addEventListener("click", async () => {
-  const typeEl = document.querySelector("#nat-type-value");
-  const ipEl = document.querySelector("#nat-public-ip");
-  const noteEl = document.querySelector("#nat-note");
-  if (typeEl) typeEl.textContent = t("natTesting");
-
-  try {
-    const result = await invoke("detect_nat_type_command");
-    if (typeEl) {
-      const labels = {
-        open: "✅ Open / Full Cone",
-        symmetric: "⚠️ Symmetric",
-        restricted: "🔶 Restricted",
-        blocked: "❌ Blocked",
-        error: "❌ Error",
-        multiple_ips: "🔀 Multiple IPs",
-      };
-      typeEl.textContent = labels[result.natType] || result.natType;
-    }
-    if (ipEl) ipEl.textContent = result.publicIp || "—";
-    if (noteEl) noteEl.textContent = result.note || "";
-    addLog(`[NAT] Type: ${result.natType}, IP: ${result.publicIp || "?"}`);
-  } catch (e) {
-    if (typeEl) typeEl.textContent = "Error";
-    if (noteEl) noteEl.textContent = String(e);
-    addLog(`[NAT] Detection failed: ${e}`);
-  }
-});
-
-// ═══════════════════════════════════════════════════════════════════════
-//  USER SEARCH MODAL
-// ═══════════════════════════════════════════════════════════════════════
-
-const searchModal = document.querySelector("#search-users-modal");
-const searchInput = document.querySelector("#search-users-input");
-const searchResults = document.querySelector("#search-users-results");
-const searchStatus = document.querySelector("#search-users-status");
-
-function openSearchModal() {
-  if (!searchModal) return;
-  searchModal.classList.remove("hidden");
-  searchModal.setAttribute("aria-hidden", "false");
-  if (searchInput) { searchInput.value = ""; searchInput.focus(); }
-  if (searchResults) searchResults.innerHTML = "";
-  if (searchStatus) searchStatus.textContent = "";
-}
-
-function closeSearchModal() {
-  if (!searchModal) return;
-  searchModal.classList.add("hidden");
-  searchModal.setAttribute("aria-hidden", "true");
-}
-
-document.querySelector("#add-friend-btn")?.addEventListener("click", openSearchModal);
-document.querySelector("#close-search-modal")?.addEventListener("click", closeSearchModal);
-searchModal?.addEventListener("click", (e) => {
-  if (e.target?.dataset?.closeSearch === "true") closeSearchModal();
-});
-
-let searchDebounce = null;
-searchInput?.addEventListener("input", () => {
-  clearTimeout(searchDebounce);
-  const q = searchInput.value.trim();
-  if (q.length < 2) {
-    if (searchResults) searchResults.innerHTML = `<div class="empty-state">Введите минимум 2 символа</div>`;
-    return;
-  }
-  if (searchStatus) searchStatus.textContent = "…";
-  searchDebounce = setTimeout(() => runUserSearch(q), 350);
-});
-
-async function runUserSearch(q) {
-  if (!friendsState.serverUrl) {
-    if (searchResults) searchResults.innerHTML = `<div class="empty-state">Сначала укажите URL сервера в Настройках</div>`;
-    return;
-  }
-  try {
-    const res = await fetch(friendsApiUrl(`/api/users/search?q=${encodeURIComponent(q)}`), {
-      headers: friendsHeaders(),
-    });
-    const data = await res.json();
-    if (searchStatus) searchStatus.textContent = "";
-    renderSearchResults(data.users || []);
-  } catch (e) {
-    if (searchStatus) searchStatus.textContent = "Ошибка";
-    if (searchResults) searchResults.innerHTML = `<div class="empty-state">Ошибка подключения к серверу</div>`;
-  }
-}
-
-function renderSearchResults(users) {
-  if (!searchResults) return;
-  if (!users.length) {
-    searchResults.innerHTML = `<div class="empty-state">Никого не найдено</div>`;
-    return;
-  }
-
-  searchResults.innerHTML = users.map((u) => {
-    const fr = u.friendship;
-    let actionBtn = "";
-    if (!fr) {
-      actionBtn = `<button class="primary-button compact" onclick="addFriendFromSearch('${escapeHtml(u.id)}')" type="button">Добавить</button>`;
-    } else if (fr.status === "pending") {
-      actionBtn = `<button class="ghost-button compact" disabled type="button">Заявка отправлена</button>`;
-    } else if (fr.status === "accepted") {
-      actionBtn = `<button class="ghost-button compact" disabled type="button">✓ Друзья</button>`;
-    }
-
-    return `
-      <div class="friend-card" style="cursor:pointer" onclick="openUserProfile('${escapeHtml(u.id)}')">
-        ${renderAvatarEl(u, 38)}
-        <div class="friend-info">
-          <strong>${escapeHtml(u.nickname)}</strong>
-          ${u.bio ? `<span class="friend-code-small">${escapeHtml(u.bio.slice(0, 40))}</span>` : ""}
-        </div>
-        <div class="friend-actions" onclick="event.stopPropagation()">
-          ${actionBtn}
-        </div>
-      </div>
-    `;
-  }).join("");
-}
-
-window.addFriendFromSearch = async function(userId) {
-  try {
-    const res = await fetch(friendsApiUrl("/api/friends/add"), {
-      method: "POST",
-      headers: friendsHeaders(),
-      body: JSON.stringify({ userId }),
-    });
-    const data = await res.json();
-    if (!res.ok) { addLog(`[Friends] ${data.error}`); return; }
-    addLog("Заявка в друзья отправлена!");
-    // re-run search to refresh states
-    const q = searchInput?.value?.trim();
-    if (q?.length >= 2) runUserSearch(q);
-  } catch (e) {
-    addLog(`[Friends] Error: ${e.message}`);
-  }
-};
-
-// ═══════════════════════════════════════════════════════════════════════
-//  PROFILE MODAL
-// ═══════════════════════════════════════════════════════════════════════
-
-const profileModal = document.querySelector("#profile-modal");
-const profileModalAvatar = document.querySelector("#profile-modal-avatar");
-const profileModalTitle = document.querySelector("#profile-modal-title");
-const profileModalMcNick = document.querySelector("#profile-modal-mc-nick");
-const profileModalBio = document.querySelector("#profile-modal-bio");
-const profileModalActions = document.querySelector("#profile-modal-actions");
-const profileStatFriends = document.querySelector("#profile-stat-friends");
-const profileStatFollowers = document.querySelector("#profile-stat-followers");
-const profileStatFollowing = document.querySelector("#profile-stat-following");
-const profileEditSection = document.querySelector("#profile-edit-section");
-const profileFriendsGrid = document.querySelector("#profile-friends-grid");
-const profileUploadBtn = document.querySelector("#profile-upload-avatar");
-const avatarFileInput = document.querySelector("#avatar-file-input");
-
-let profileModalCurrentId = null;
-
-function closeProfileModal() {
-  if (!profileModal) return;
-  profileModal.classList.add("hidden");
-  profileModal.setAttribute("aria-hidden", "true");
-  profileModalCurrentId = null;
-}
-
-document.querySelector("#close-profile-modal")?.addEventListener("click", closeProfileModal);
-profileModal?.addEventListener("click", (e) => {
-  if (e.target?.dataset?.closeProfile === "true") closeProfileModal();
-});
-
-async function openOwnProfile() {
-  if (!friendsState.serverUrl || !friendsState.user) {
-    // Fallback: open profile without server
-    showProfileModal({
-      id: null,
-      nickname: friendsState.user?.nickname || "Player",
-      bio: friendsState.user?.bio || "",
-      avatar_url: friendsState.user?.avatar_url || null,
-      minecraft_nickname: friendsState.user?.minecraft_nickname || "",
-      friends: 0, followers: 0, following: 0,
-    }, true);
-    return;
-  }
-  try {
-    const res = await fetch(friendsApiUrl("/api/me"), { headers: friendsHeaders() });
-    const data = await res.json();
-    showProfileModal(data, true);
-  } catch (e) {
-    addLog(`[Profile] Failed to load: ${e.message}`);
-  }
-}
-
-window.openUserProfile = async function(userId) {
-  if (!friendsState.serverUrl) return;
-  try {
-    const res = await fetch(friendsApiUrl(`/api/users/${userId}`), { headers: friendsHeaders() });
-    const data = await res.json();
-    if (!res.ok) { addLog(`[Profile] ${data.error}`); return; }
-    showProfileModal(data, false);
-  } catch (e) {
-    addLog(`[Profile] Error: ${e.message}`);
-  }
-};
-
-function showProfileModal(user, isOwn) {
-  if (!profileModal) return;
-  profileModalCurrentId = user.id;
-
-  // Avatar
-  setAvatarEl(profileModalAvatar, user, 72);
-
-  // Info
-  if (profileModalTitle) profileModalTitle.textContent = user.nickname || "Player";
-  if (profileModalMcNick) {
-    profileModalMcNick.textContent = user.minecraft_nickname ? `Minecraft: ${user.minecraft_nickname}` : "";
-  }
-  if (profileModalBio) profileModalBio.textContent = user.bio || "";
-
-  // Stats
-  if (profileStatFriends) profileStatFriends.textContent = user.friends ?? 0;
-  if (profileStatFollowers) profileStatFollowers.textContent = user.followers ?? 0;
-  if (profileStatFollowing) profileStatFollowing.textContent = user.following ?? 0;
-
-  // Actions
-  if (profileModalActions) {
-    if (isOwn) {
-      profileModalActions.innerHTML = `
-        <button class="ghost-button compact" type="button" onclick="toggleProfileEdit()">✏ Редактировать</button>
-      `;
-      // Show upload btn
-      profileUploadBtn?.classList.remove("hidden");
-    } else {
-      const fr = user.friendship;
-      let friendBtn = "";
-      if (!fr) {
-        friendBtn = `<button class="primary-button compact" type="button" onclick="addFriendFromSearch('${escapeHtml(user.id)}')">+ Друзья</button>`;
-      } else if (fr.status === "pending") {
-        friendBtn = `<button class="ghost-button compact" disabled>Заявка отправлена</button>`;
-      } else if (fr.status === "accepted") {
-        friendBtn = `<button class="ghost-button compact" disabled>✓ Друзья</button>`;
-      }
-
-      const followBtn = user.isFollowing
-        ? `<button class="ghost-button compact" type="button" onclick="toggleFollow('${escapeHtml(user.id)}', true)">Отписаться</button>`
-        : `<button class="ghost-button compact" type="button" onclick="toggleFollow('${escapeHtml(user.id)}', false)">Подписаться</button>`;
-
-      profileModalActions.innerHTML = friendBtn + followBtn;
-      profileUploadBtn?.classList.add("hidden");
-    }
-  }
-
-  // Edit form
-  if (profileEditSection) {
-    profileEditSection.classList.add("hidden");
-    if (isOwn) {
-      const nickInput = document.querySelector("#profile-edit-nick");
-      const mcInput = document.querySelector("#profile-edit-mc");
-      const bioInput = document.querySelector("#profile-edit-bio");
-      if (nickInput) nickInput.value = user.nickname || "";
-      if (mcInput) mcInput.value = user.minecraft_nickname || "";
-      if (bioInput) bioInput.value = user.bio || "";
-    }
-  }
-
-  // Friends mini-grid
-  if (profileFriendsGrid) {
-    const friends = Array.isArray(user.friends) ? user.friends : [];
-    if (!friends.length) {
-      profileFriendsGrid.innerHTML = `<span class="friend-code-small">Нет друзей</span>`;
-    } else {
-      profileFriendsGrid.innerHTML = friends.map((f) => `
-        <div class="profile-mini-avatar" onclick="openUserProfile('${escapeHtml(f.id)}')" title="${escapeHtml(f.nickname)}">
-          ${f.avatar_url
-            ? `<img src="${escapeHtml(f.avatar_url)}" alt="${escapeHtml(f.nickname)}" />`
-            : escapeHtml((f.nickname || "?")[0].toUpperCase())}
-        </div>
-      `).join("");
-    }
-  }
-
-  profileModal.classList.remove("hidden");
-  profileModal.setAttribute("aria-hidden", "false");
-}
-
-window.toggleProfileEdit = function() {
-  if (!profileEditSection) return;
-  profileEditSection.classList.toggle("hidden");
-};
-
-document.querySelector("#profile-save-btn")?.addEventListener("click", async () => {
-  const nick = document.querySelector("#profile-edit-nick")?.value?.trim();
-  const mc = document.querySelector("#profile-edit-mc")?.value?.trim();
-  const bio = document.querySelector("#profile-edit-bio")?.value?.trim();
-  if (!nick) return;
-
-  try {
-    const res = await fetch(friendsApiUrl("/api/me"), {
-      method: "PATCH",
-      headers: friendsHeaders(),
-      body: JSON.stringify({ nickname: nick, minecraftNickname: mc, bio }),
-    });
-    const data = await res.json();
-    friendsState.user = data;
-    // Update sidebar
-    if (brandUserNameEl) brandUserNameEl.textContent = data.nickname;
-    // Refresh avatar in sidebar
-    updateSidebarAvatar(data);
-    // Refresh profile modal
-    showProfileModal(data, true);
-    profileEditSection?.classList.add("hidden");
-    addLog("Профиль обновлён");
-  } catch (e) {
-    addLog(`[Profile] Save error: ${e.message}`);
-  }
-});
-
-document.querySelector("#profile-cancel-edit")?.addEventListener("click", () => {
-  profileEditSection?.classList.add("hidden");
-});
-
-// Avatar upload
-profileUploadBtn?.addEventListener("click", () => avatarFileInput?.click());
-avatarFileInput?.addEventListener("change", async () => {
-  const file = avatarFileInput?.files?.[0];
-  if (!file || !friendsState.serverUrl) return;
-
-  const formData = new FormData();
-  formData.append("avatar", file);
-
-  try {
-    const res = await fetch(friendsApiUrl("/api/me/avatar"), {
-      method: "POST",
-      headers: { "X-Device-Id": friendsState.deviceId },
-      body: formData,
-    });
-    const data = await res.json();
-    if (!res.ok) { addLog(`[Avatar] ${data.error}`); return; }
-
-    if (friendsState.user) friendsState.user.avatar_url = data.avatarUrl;
-    updateSidebarAvatar(friendsState.user);
-    // Refresh profile modal avatar
-    setAvatarEl(profileModalAvatar, friendsState.user, 72);
-    addLog("Аватарка обновлена!");
-  } catch (e) {
-    addLog(`[Avatar] Upload error: ${e.message}`);
-  }
-});
-
-function updateSidebarAvatar(user) {
-  if (!user) return;
-  if (brandUserNameEl) brandUserNameEl.textContent = user.nickname || "Player";
-  if (brandAvatarFallbackEl) brandAvatarFallbackEl.textContent = (user.nickname || "P")[0].toUpperCase();
-  if (brandAvatarImageEl) {
-    if (user.avatar_url) {
-      brandAvatarImageEl.src = user.avatar_url;
-      brandAvatarImageEl.classList.remove("hidden");
-      brandAvatarFallbackEl?.classList?.add("hidden");
-    } else {
-      brandAvatarImageEl.classList.add("hidden");
-      brandAvatarFallbackEl?.classList?.remove("hidden");
-    }
-  }
-}
-
-// ── Avatar helper ────────────────────────────────────────────────────────
-function renderAvatarEl(user, size = 38) {
-  const cls = `friend-avatar`;
-  if (user.avatar_url) {
-    return `<div class="${cls}" style="width:${size}px;height:${size}px;padding:0;overflow:hidden"><img src="${escapeHtml(user.avatar_url)}" alt="${escapeHtml(user.nickname)}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit"/></div>`;
-  }
-  return `<div class="${cls}" style="width:${size}px;height:${size}px">${escapeHtml((user.nickname || "?")[0].toUpperCase())}</div>`;
-}
-
-function setAvatarEl(el, user, size) {
-  if (!el) return;
-  el.innerHTML = "";
-  if (user?.avatar_url) {
-    const img = document.createElement("img");
-    img.src = user.avatar_url;
-    img.alt = user.nickname || "";
-    img.style.cssText = "width:100%;height:100%;object-fit:cover";
-    el.appendChild(img);
-  } else {
-    el.textContent = (user?.nickname || "?")[0].toUpperCase();
-  }
-}
-
-window.toggleFollow = async function(userId, isFollowing) {
-  try {
-    const method = isFollowing ? "DELETE" : "POST";
-    await fetch(friendsApiUrl(`/api/users/${userId}/follow`), {
-      method,
-      headers: friendsHeaders(),
-    });
-    // Refresh profile
-    openUserProfile(userId);
-  } catch (e) {
-    addLog(`[Follow] Error: ${e.message}`);
-  }
-};
-
-
-
-
-
-
+// Call on startup
+updateProfileSelect();

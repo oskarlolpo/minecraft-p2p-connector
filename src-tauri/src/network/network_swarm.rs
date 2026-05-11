@@ -673,7 +673,7 @@ async fn run_swarm_actor(
                     let local_peer_id = *swarm.local_peer_id();
                     let listen_addrs = current_listen_addrs(&swarm);
                     match start_host_reverse_tunnel(
-                        &app,
+                        app.clone(),
                         &status,
                         &config,
                         &cancel,
@@ -1067,7 +1067,7 @@ async fn start_host_reverse_tunnel(
         return Err(error).with_context(|| format!("локальный Minecraft на 127.0.0.1:{local_port} недоступен"));
     }
     let handle = tunnel::start_reverse_tunnel(
-        ReverseTunnelConfig::bore_pub(local_port),
+        ReverseTunnelConfig::default_relay(local_port),
         cancel.clone(),
     )
     .await
@@ -1213,6 +1213,7 @@ async fn run_client_proxy_listener(
                                 }
                                 ActiveRoute::ReverseTunnel(endpoint) => {
                                     if let Err(error) = tunnel::bridge_tcp_to_remote(
+                                        _app.clone(),
                                         tcp_stream,
                                         &endpoint.public_host,
                                         endpoint.public_port,

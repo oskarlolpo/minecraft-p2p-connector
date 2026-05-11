@@ -53,7 +53,7 @@ impl BedrockBroadcaster {
                                     // MOTD
                                     // MCPE;Server Name;ProtocolVersion;VersionString;Online;Max;ServerUID;SecondLine;GameMode;GameModeNumeric;Portv4;Portv6;
                                     let motd = format!(
-                                        "MCPE;{};662;1.20.71;0;30;1234567890;P2P Connector;Survival;1;{};19133;",
+                                        "MCPE;{};776;1.21.51;0;30;1234567890;P2P Connector;Survival;1;{};19133;",
                                         room_name, proxy_port
                                     );
                                     

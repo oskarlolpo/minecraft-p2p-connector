@@ -1071,21 +1071,24 @@ fn sanitize_minecraft_nickname(value: &str) -> Option<String> {
 }
 
 fn read_text_lossy(path: &Path) -> Option<String> {
-    let bytes = fs::read(path).ok()?;
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = fs::File::open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    let len = metadata.len();
     
-    // Try UTF-8 first
-    if let Ok(utf8_str) = String::from_utf8(bytes.clone()) {
-        return Some(utf8_str);
+    // For json files, read fully. For logs, read last 32 KB.
+    let is_json = path.extension().and_then(|s| s.to_str()).unwrap_or_default().eq_ignore_ascii_case("json");
+    let read_len = if is_json { len } else { std::cmp::min(len, 32 * 1024) };
+    
+    if len > read_len {
+        file.seek(SeekFrom::End(-(read_len as i64))).ok()?;
     }
-
-    // Fallback to Windows-1251 for Russian users with legacy encoding
-    let (res, _, had_errors) = encoding_rs::WINDOWS_1251.decode(&bytes);
-    if !had_errors {
-        return Some(res.into_owned());
-    }
-
-    // Last resort: lossy UTF-8
-    Some(String::from_utf8_lossy(&bytes).to_string())
+    
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    
+    let ascii_bytes: Vec<u8> = bytes.into_iter().filter(|&b| b.is_ascii() || b == b'\n' || b == b'\r').collect();
+    Some(String::from_utf8_lossy(&ascii_bytes).into_owned())
 }
 
 fn status_description_to_string(value: &serde_json::Value) -> Option<String> {

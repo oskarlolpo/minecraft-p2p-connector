@@ -95,12 +95,18 @@ impl GeyserManager {
         let stderr = child.stderr.take().context("failed to take Geyser stderr")?;
 
         // Spawn log forwarding tasks
+        let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<()>(1);
         let app_stdout = app.clone();
         task::spawn_blocking(move || {
             let reader = BufReader::new(stdout);
+            let mut sent_done = false;
             for line in reader.lines() {
                 if let Ok(l) = line {
-                    let _ = app_stdout.emit("geyser-log", l);
+                    if !sent_done && l.contains("Done (") {
+                        let _ = done_tx.blocking_send(());
+                        sent_done = true;
+                    }
+                    let _ = app_stdout.emit("geyser-log", l.clone());
                 }
             }
         });
@@ -140,7 +146,7 @@ impl GeyserManager {
         };
 
         drop(state);
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        let _ = tokio::time::timeout(Duration::from_secs(15), done_rx.recv()).await;
 
         let mut state = self.inner.lock().await;
         if let Some(child) = state.child.as_mut() {

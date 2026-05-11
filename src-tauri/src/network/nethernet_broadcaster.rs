@@ -125,7 +125,7 @@ impl NetherNetBroadcaster {
         mac.update(&payload);
         let hmac_result = mac.finalize().into_bytes();
 
-        // Encrypt payload with manual PKCS7 padding
+        // Encrypt payload with PKCS7 padding
         let mut enc = Aes256EcbEnc::new(key.into());
         let pos = payload.len();
         let pad_len = 16 - (pos % 16);
@@ -143,4 +143,3 @@ impl NetherNetBroadcaster {
         final_datagram
     }
 }
-
