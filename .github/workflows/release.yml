@@ -35,17 +35,26 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Build and publish Tauri bundle
-        uses: tauri-apps/tauri-action@v0.6.2
+      - name: Build Tauri bundle
+        run: npm run tauri build -- --bundles nsis,msi
+        env:
+          CI: true
+
+      - name: Create Release and Upload Assets
+        shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-        with:
-          owner: oskarlolpo
-          repo: minecraft-p2p-connector
-          tagName: ${{ github.ref_name }}
-          releaseName: Minecraft P2P Connector ${{ github.ref_name }}
-          releaseBody: Direct UDP hole-punching Minecraft Java connector for Windows.
-          releaseDraft: false
-          prerelease: false
-          args: --bundles nsis,msi
-          releaseCommitish: ${{ github.sha }}
+        run: |
+          $repo = "oskarlolpo/minecraft-p2p-connector"
+          $tag = "${{ github.ref_name }}"
+          
+          # Проверяем, существует ли релиз. Если нет - создаем.
+          $releaseExists = gh release view $tag --repo $repo 2>$null
+          if (-not $releaseExists) {
+              gh release create $tag --repo $repo --title "Minecraft P2P Connector $tag" --notes "Direct UDP hole-punching Minecraft Java connector for Windows." --target main
+          }
+
+          # Загружаем все файлы из папки bundle
+          Get-ChildItem -Path "src-tauri/target/release/bundle/nsis/*.exe", "src-tauri/target/release/bundle/msi/*.msi" | ForEach-Object {
+              gh release upload $tag $_.FullName --repo $repo --clobber
+          }
