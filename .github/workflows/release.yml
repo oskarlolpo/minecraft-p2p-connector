@@ -48,3 +48,4 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: --bundles nsis,msi
+          commit: ${{ github.sha }}
