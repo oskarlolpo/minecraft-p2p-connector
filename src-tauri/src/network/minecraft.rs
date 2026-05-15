@@ -1071,24 +1071,57 @@ fn sanitize_minecraft_nickname(value: &str) -> Option<String> {
 }
 
 fn read_text_lossy(path: &Path) -> Option<String> {
+    use encoding_rs::WINDOWS_1251;
     use std::io::{Read, Seek, SeekFrom};
+
     let mut file = fs::File::open(path).ok()?;
     let metadata = file.metadata().ok()?;
     let len = metadata.len();
-    
+
     // For json files, read fully. For logs, read last 32 KB.
-    let is_json = path.extension().and_then(|s| s.to_str()).unwrap_or_default().eq_ignore_ascii_case("json");
+    let is_json = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .eq_ignore_ascii_case("json");
     let read_len = if is_json { len } else { std::cmp::min(len, 32 * 1024) };
-    
+
     if len > read_len {
         file.seek(SeekFrom::End(-(read_len as i64))).ok()?;
     }
-    
+
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).ok()?;
-    
-    let ascii_bytes: Vec<u8> = bytes.into_iter().filter(|&b| b.is_ascii() || b == b'\n' || b == b'\r').collect();
-    Some(String::from_utf8_lossy(&ascii_bytes).into_owned())
+    if bytes.is_empty() {
+        return Some(String::new());
+    }
+
+    // Preserve non-ASCII characters (e.g. Cyrillic) instead of dropping them.
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        return Some(String::from_utf8_lossy(&bytes[3..]).into_owned());
+    }
+
+    if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
+        let mut utf16_units = Vec::with_capacity((bytes.len() - 2) / 2);
+        let little_endian = bytes.starts_with(&[0xFF, 0xFE]);
+        let data = &bytes[2..];
+        for chunk in data.chunks_exact(2) {
+            let value = if little_endian {
+                u16::from_le_bytes([chunk[0], chunk[1]])
+            } else {
+                u16::from_be_bytes([chunk[0], chunk[1]])
+            };
+            utf16_units.push(value);
+        }
+        return Some(String::from_utf16_lossy(&utf16_units));
+    }
+
+    if let Ok(text) = String::from_utf8(bytes.clone()) {
+        return Some(text);
+    }
+
+    let (decoded, _, _) = WINDOWS_1251.decode(&bytes);
+    Some(decoded.into_owned())
 }
 
 fn status_description_to_string(value: &serde_json::Value) -> Option<String> {
