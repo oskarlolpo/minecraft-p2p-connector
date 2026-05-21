@@ -9,6 +9,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.106.0",
     "@tauri-apps/api": "^2.10.0",
     "ably": "^2.13.0"
   },
@@ -20,4 +21,3 @@
     "vite": "^5.4.19"
   }
 }
-

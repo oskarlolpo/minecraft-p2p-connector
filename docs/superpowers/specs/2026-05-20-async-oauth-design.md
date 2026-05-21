@@ -53,7 +53,7 @@ sequenceDiagram
     Rust-->>Browser: Возврат OLED HTML-страницы успеха (callback.html)
     
     Note over Browser: JS на странице считывает window.location.hash
-    Browser->>Rust: GET /token?access_token=...&refresh_token=... (отправка токенов)
+    Browser->>Rust: POST /token (JSON c access_token и refresh_token)
     Rust-->>Browser: HTTP 200 OK (токены получены)
     Note over Browser: Отображение сообщения "Успешно! Можно закрыть вкладку"
     
@@ -74,9 +74,12 @@ sequenceDiagram
 *   **Команда `start_oauth_server`**:
     *   Запускает асинхронный `tokio::net::TcpListener` на `127.0.0.1:14235`.
     *   Слушает GET-запросы:
-        *   `/callback`: возвращает красивую OLED HTML-страницу (`callback.html`), которая считывает хэш параметров и отправляет их на `/token`.
-        *   `/token`: извлекает параметры `access_token` и `refresh_token`, отправляет событие `oauth-login` во фронтенд через `app.emit` и завершает работу сервера.
+        *   `/callback`: возвращает красивую OLED HTML-страницу (`callback.html`), которая считывает хэш параметров и отправляет их на `/token` методом POST.
         *   `/success` / `/error`: вспомогательные страницы отображения статуса для пользователя.
+    *   Слушает POST-запросы:
+        *   `/token`: считывает заголовки, определяет Content-Length, вычитывает всё тело POST-запроса, распарсивает JSON (извлекая `access_token` и `refresh_token`), отправляет событие `oauth-login` во фронтенд через `app.emit` и завершает работу сервера.
+    *   Слушает OPTIONS-запросы:
+        *   Обрабатывает CORS preflight-запросы (метод OPTIONS) возвращая `204 No Content` со всеми необходимыми CORS-заголовками.
 *   **Команда `open_url`**:
     *   Открывает URL в системном браузере по умолчанию с использованием `cmd /C start` (на Windows).
 
