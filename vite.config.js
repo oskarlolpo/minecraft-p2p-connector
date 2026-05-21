@@ -6,12 +6,18 @@ export default defineConfig({
   clearScreen: false,
   server: {
     host: "127.0.0.1",
-    port: 5173,
+    port: 3000,
     strictPort: true,
   },
   build: {
     outDir: "../dist",
     target: "es2022",
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: "src/index.html",
+        callback: "src/callback.html"
+      }
+    }
   },
 });

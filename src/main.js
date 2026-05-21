@@ -1,6 +1,34 @@
 import * as Ably from "ably";
-import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
+import { listen as tauriListen } from "@tauri-apps/api/event";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { supabase } from "./supabase.js";
+
+const isTauri = !!(window.__TAURI_INTERNALS__ || (window.__tauri && window.__tauri.invoke));
+const listen = isTauri ? tauriListen : () => new Promise(() => {});
+const invoke = isTauri ? tauriInvoke : async (cmd, args) => {
+  console.warn(`[Tauri Mock] invoke("${cmd}") called outside Tauri environment`, args);
+  if (cmd === "get_status") {
+    return {
+      mode: "idle",
+      state: "idle",
+      roomCode: null,
+      udpBindAddr: null,
+      publicUdpAddr: null,
+      localGamePort: null,
+      minecraftVersion: null,
+      geyserEnabled: false,
+      bedrockPort: null,
+      passwordProtected: false,
+      peerCount: 0,
+      peers: [],
+      note: "Запущено вне Tauri",
+      lastError: null,
+      signalingServer: "Mock",
+      logs: [],
+    };
+  }
+  return null;
+};
 
 import { I18N } from "./i18n.js";
 
@@ -61,16 +89,21 @@ const navHomeEl = document.querySelector("#nav-home");
 const navSettingsEl = document.querySelector("#nav-settings");
 const pageHomeEl = document.querySelector("#page-home");
 const pageSettingsEl = document.querySelector("#page-settings");
+const pageProfileEl = document.querySelector("#page-profile");
 const portHelpEl = document.querySelector("#port-help");
 const brandUserNameEl = document.querySelector("#brand-user-name");
 const brandAvatarImageEl = document.querySelector("#brand-avatar-image");
 const brandAvatarFallbackEl = document.querySelector("#brand-avatar-fallback");
 const profileMenuTriggerEl = document.querySelector("#profile-menu-trigger");
-const profileMenuEl = document.querySelector("#profile-menu");
-const profileNicknameEl = document.querySelector("#profile-nickname");
+const profileNicknameInputEl = document.querySelector("#profile-nickname-input");
 const profileAvatarFileEl = document.querySelector("#profile-avatar-file");
-const chooseAvatarEl = document.querySelector("#choose-avatar");
-const saveProfileEl = document.querySelector("#save-profile");
+const profileBannerFileEl = document.querySelector("#profile-banner-file");
+const editBannerBtnEl = document.querySelector("#edit-banner-btn");
+const editAvatarBtnEl = document.querySelector("#edit-avatar-btn");
+const editNameBtnEl = document.querySelector("#edit-name-btn");
+const socialBannerImgEl = document.querySelector("#social-banner-img");
+const settingsAuthEmailEl = document.querySelector("#settings-auth-email");
+const settingsAuthProviderEl = document.querySelector("#settings-auth-provider");
 const settingsVersionEl = document.querySelector("#settings-version");
 const checkUpdatesEl = document.querySelector("#check-updates");
 const installUpdateEl = document.querySelector("#install-update");
@@ -85,6 +118,38 @@ const closePlayerModalSecondaryEl = document.querySelector("#close-player-modal-
 const kickButtonEl = document.querySelector("#kick-button");
 const pingCanvas = document.querySelector("#ping-graph");
 const ctx = pingCanvas?.getContext("2d");
+
+const authOverlayEl = document.querySelector("#auth-overlay");
+const authFormEl = document.querySelector("#auth-form");
+const authEmailEl = document.querySelector("#auth-email");
+const authPasswordEl = document.querySelector("#auth-password");
+const btnAuthSubmitEl = document.querySelector("#btn-auth-submit");
+const btnToggleModeEl = document.querySelector("#btn-toggle-mode");
+const btnGoogleEl = document.querySelector("#btn-google");
+const btnGuestEl = document.querySelector("#btn-guest");
+let originalGoogleBtnHtml = btnGoogleEl ? btnGoogleEl.innerHTML : "";
+const authTitleEl = document.querySelector("#auth-title");
+const authSubtitleEl = document.querySelector("#auth-subtitle");
+const authErrorEl = document.querySelector("#auth-error-message");
+const profileAvatarPreviewEl = document.querySelector("#profile-avatar-preview");
+const profileAvatarLetterEl = document.querySelector("#profile-avatar-letter");
+const profileDisplayNameEl = document.querySelector("#profile-display-name");
+const profileUserIdEl = document.querySelector("#profile-user-id");
+const profileIdInputEl = document.querySelector("#profile-id-input");
+const editIdBtnEl = document.querySelector("#edit-id-btn");
+const nameConfirmActionsEl = document.querySelector("#name-confirm-actions");
+const idConfirmActionsEl = document.querySelector("#id-confirm-actions");
+const saveNameBtnEl = document.querySelector("#save-name-btn");
+const cancelNameBtnEl = document.querySelector("#cancel-name-btn");
+const saveIdBtnEl = document.querySelector("#save-id-btn");
+const cancelIdBtnEl = document.querySelector("#cancel-id-btn");
+const profileAuthEmailEl = document.querySelector("#profile-auth-email");
+const profileAuthProviderEl = document.querySelector("#profile-auth-provider");
+const btnLogoutEl = document.querySelector("#btn-logout");
+
+// Store the real display ID (not from textContent which may show "Скопировано!")
+let storedDisplayId = null;
+let currentEditingField = null; // 'name' | 'id' | null
 
 let activeModalPeerId = null;
 
@@ -163,9 +228,11 @@ function loadProfile() {
     const parsed = raw ? JSON.parse(raw) : {};
     const nickname = String(parsed?.nickname || "Player").trim() || "Player";
     const avatarDataUrl = typeof parsed?.avatarDataUrl === "string" ? parsed.avatarDataUrl : null;
-    return { nickname, avatarDataUrl };
+    const customId = typeof parsed?.customId === "string" ? parsed.customId : null;
+    const customBanner = typeof parsed?.customBanner === "string" ? parsed.customBanner : null;
+    return { nickname, avatarDataUrl, customId, customBanner };
   } catch {
-    return { nickname: "Player", avatarDataUrl: null };
+    return { nickname: "Player", avatarDataUrl: null, customId: null, customBanner: null };
   }
 }
 
@@ -301,7 +368,10 @@ function syncExternalHostMode() {
 function renderProfile() {
   const nickname = state.profile.nickname?.trim() || "Player";
   brandUserNameEl.textContent = nickname;
-  if (profileNicknameEl) profileNicknameEl.value = nickname;
+  
+  if (profileNicknameInputEl && currentEditingField !== "name") {
+    profileNicknameInputEl.value = nickname;
+  }
 
   if (state.profile.avatarDataUrl) {
     brandAvatarImageEl.src = state.profile.avatarDataUrl;
@@ -313,35 +383,50 @@ function renderProfile() {
     brandAvatarFallbackEl.classList.remove("hidden");
     brandAvatarFallbackEl.textContent = nickname.slice(0, 1).toUpperCase();
   }
+
+  // Profile Page Elements (for instant loading without flickering)
+  if (profileDisplayNameEl) profileDisplayNameEl.textContent = nickname;
+  
+  const displayId = state.profile.customId || "—";
+  if (profileUserIdEl) profileUserIdEl.textContent = displayId !== "—" ? `@${displayId}` : "ID: —";
+  
+  if (profileIdInputEl && currentEditingField !== "id") {
+    profileIdInputEl.value = displayId !== "—" ? displayId : "";
+  }
+  storedDisplayId = displayId !== "—" ? displayId : null;
+
+  // Large Avatar on profile page
+  if (state.profile.avatarDataUrl) {
+    if (profileAvatarPreviewEl) {
+      profileAvatarPreviewEl.src = state.profile.avatarDataUrl;
+      profileAvatarPreviewEl.classList.remove("hidden");
+    }
+    if (profileAvatarLetterEl) profileAvatarLetterEl.classList.add("hidden");
+  } else {
+    if (profileAvatarPreviewEl) {
+      profileAvatarPreviewEl.removeAttribute("src");
+      profileAvatarPreviewEl.classList.add("hidden");
+    }
+    if (profileAvatarLetterEl) {
+      profileAvatarLetterEl.textContent = nickname.slice(0, 1).toUpperCase();
+      profileAvatarLetterEl.classList.remove("hidden");
+    }
+  }
+
+  // Large Banner on profile page
+  if (state.profile.customBanner) {
+    if (socialBannerImgEl) {
+      socialBannerImgEl.src = state.profile.customBanner;
+      socialBannerImgEl.classList.remove("hidden");
+    }
+  } else {
+    if (socialBannerImgEl) {
+      socialBannerImgEl.removeAttribute("src");
+      socialBannerImgEl.classList.add("hidden");
+    }
+  }
 }
 
-function toggleProfileMenu(force) {
-  ensureProfileMenuPortal();
-  if (!profileMenuEl) return;
-  const open = typeof force === "boolean" ? force : profileMenuEl.classList.contains("hidden");
-  profileMenuEl.classList.toggle("hidden", !open);
-  if (open) requestAnimationFrame(positionProfileMenu);
-}
-
-function ensureProfileMenuPortal() {
-  if (!profileMenuEl || profileMenuEl.parentElement === document.body) return;
-  document.body.appendChild(profileMenuEl);
-}
-
-function positionProfileMenu() {
-  if (!profileMenuEl || profileMenuEl.classList.contains("hidden") || !profileMenuTriggerEl) return;
-  const triggerRect = profileMenuTriggerEl.getBoundingClientRect();
-  const menuRect = profileMenuEl.getBoundingClientRect();
-  const margin = 8;
-  let left = triggerRect.left;
-  let top = triggerRect.bottom + margin;
-  if (top + menuRect.height > window.innerHeight) top = triggerRect.top - menuRect.height - margin;
-  if (left + menuRect.width > window.innerWidth) left = window.innerWidth - menuRect.width - margin;
-  if (left < 0) left = margin;
-  if (top < 0) top = margin;
-  profileMenuEl.style.left = `${Math.round(left)}px`;
-  profileMenuEl.style.top = `${Math.round(top)}px`;
-}
 
 async function pickAvatarFile() {
   if (profileAvatarFileEl) profileAvatarFileEl.click();
@@ -560,10 +645,11 @@ function applyLanguage(language) {
 
 function setPage(page) {
   state.page = page;
-  pageHomeEl.classList.toggle("page-active", page === "home");
-  pageSettingsEl.classList.toggle("page-active", page === "settings");
-  navHomeEl.classList.toggle("nav-button-active", page === "home");
-  navSettingsEl.classList.toggle("nav-button-active", page === "settings");
+  pageHomeEl?.classList.toggle("page-active", page === "home");
+  pageSettingsEl?.classList.toggle("page-active", page === "settings");
+  pageProfileEl?.classList.toggle("page-active", page === "profile");
+  navHomeEl?.classList.toggle("nav-button-active", page === "home");
+  navSettingsEl?.classList.toggle("nav-button-active", page === "settings");
 }
 
 async function loadAppInfo() {
@@ -2375,16 +2461,6 @@ await pollStatus();
 
 
 
-profileMenuTriggerEl?.addEventListener("click", () => toggleProfileMenu());
-chooseAvatarEl?.addEventListener("click", pickAvatarFile);
-profileAvatarFileEl?.addEventListener("change", handleAvatarChosen);
-saveProfileEl?.addEventListener("click", saveProfileFromInputs);
-document.addEventListener("click", (e) => {
-  if (profileMenuEl && !profileMenuEl.classList.contains("hidden") && !profileMenuEl.contains(e.target) && (!profileMenuTriggerEl || !profileMenuTriggerEl.contains(e.target))) {
-    toggleProfileMenu(false);
-  }
-});
-
 
 // Network Stats Graph
 const networkGraphCanvas = document.querySelector("#network-stats-graph");
@@ -2447,4 +2523,605 @@ setInterval(() => {
   }
 }, 1000);
 
+// ==========================================
+// SUPABASE AUTH LOGIC
+// ==========================================
+let authMode = "register";
 
+function showAuthError(msg) {
+  if (authErrorEl) {
+    authErrorEl.textContent = msg;
+    authErrorEl.classList.remove("hidden");
+  }
+}
+
+function generateRandomNickname() {
+  const adjectives = ["Swift", "Shadow", "Crystal", "Iron", "Storm", "Blaze", "Frost", "Neon", "Void", "Pixel", "Dark", "Lunar", "Solar", "Turbo", "Hyper"];
+  const nouns = ["Miner", "Crafter", "Builder", "Archer", "Knight", "Wizard", "Dragon", "Wolf", "Hawk", "Fox", "Bear", "Tiger", "Raven", "Golem", "Phantom"];
+  const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+  const noun = nouns[Math.floor(Math.random() * nouns.length)];
+  const num = Math.floor(Math.random() * 999);
+  return `${adj}${noun}${num}`;
+}
+
+function generateShortId(uuid) {
+  if (!uuid) return "—";
+  return uuid.slice(0, 8).toUpperCase();
+}
+
+async function updateProfileData(data) {
+  const guestData = localStorage.getItem("p2p-guest-session");
+  if (guestData) {
+    let sess = JSON.parse(guestData);
+    if (!sess.user.user_metadata) sess.user.user_metadata = {};
+    sess.user.user_metadata = { ...sess.user.user_metadata, ...data };
+    localStorage.setItem("p2p-guest-session", JSON.stringify(sess));
+    return { data: sess };
+  } else {
+    return await supabase.auth.updateUser({ data });
+  }
+}
+
+function populateProfilePanel(session) {
+  if (!session?.user) return;
+  const user = session.user;
+  const email = user.email || "—";
+  const provider = user.app_metadata?.provider || "email";
+  const providerLabel = provider === "google" ? "Google" : provider === "email" ? "Email / Пароль" : provider;
+  const shortId = generateShortId(user.id);
+
+  const meta = user.user_metadata || {};
+  let updateData = {};
+  let needsUpdate = false;
+
+  // 1. Sync Nickname
+  if (meta.custom_nickname) {
+    state.profile.nickname = meta.custom_nickname;
+  } else {
+    const googleName = meta.full_name || meta.name;
+    const localNick = state.profile.nickname;
+    if (localNick && localNick !== "Player") {
+      state.profile.nickname = localNick;
+    } else {
+      state.profile.nickname = googleName || generateRandomNickname();
+    }
+    updateData.custom_nickname = state.profile.nickname;
+    needsUpdate = true;
+  }
+
+  // 2. Sync Avatar
+  const googleAvatar = meta.avatar_url || meta.picture;
+  let activeAvatar = meta.custom_avatar;
+  if (!activeAvatar) {
+    if (state.profile.avatarDataUrl) {
+      activeAvatar = state.profile.avatarDataUrl;
+      updateData.custom_avatar = activeAvatar;
+      needsUpdate = true;
+    } else if (googleAvatar) {
+      activeAvatar = googleAvatar;
+      updateData.custom_avatar = activeAvatar;
+      needsUpdate = true;
+    }
+  }
+  state.profile.avatarDataUrl = activeAvatar || null;
+
+  // 3. Sync Custom ID
+  let displayId = meta.custom_id;
+  if (!displayId) {
+    if (state.profile.customId) {
+      displayId = state.profile.customId;
+    } else {
+      displayId = shortId;
+    }
+    updateData.custom_id = displayId;
+    needsUpdate = true;
+  }
+  storedDisplayId = displayId;
+  state.profile.customId = displayId;
+
+  // If there are newly populated fields, push them to Supabase user_metadata immediately
+  if (needsUpdate) {
+    updateProfileData(updateData)
+      .then(({ data, error }) => {
+        if (error) console.error("[auth] Failed to auto-sync profile metadata:", error);
+        else console.log("[auth] Successfully auto-synced profile metadata to server:", data);
+      })
+      .catch(err => console.error("[auth] Profile metadata update error:", err));
+  }
+
+  // Banner
+  if (meta.custom_banner) {
+    state.profile.customBanner = meta.custom_banner;
+    if (socialBannerImgEl) {
+      socialBannerImgEl.src = meta.custom_banner;
+      socialBannerImgEl.classList.remove("hidden");
+    }
+  } else {
+    state.profile.customBanner = null;
+    if (socialBannerImgEl) {
+      socialBannerImgEl.removeAttribute("src");
+      socialBannerImgEl.classList.add("hidden");
+    }
+  }
+
+  // Save synchronized profile state to localStorage
+  saveProfileState();
+
+  // Update UI Elements
+  if (activeAvatar) {
+    if (profileAvatarPreviewEl) {
+      profileAvatarPreviewEl.src = activeAvatar;
+      profileAvatarPreviewEl.classList.remove("hidden");
+    }
+    if (profileAvatarLetterEl) profileAvatarLetterEl.classList.add("hidden");
+    if (brandAvatarImageEl) {
+      brandAvatarImageEl.src = activeAvatar;
+      brandAvatarImageEl.classList.remove("hidden");
+    }
+    if (brandAvatarFallbackEl) brandAvatarFallbackEl.classList.add("hidden");
+  } else {
+    const letter = state.profile.nickname.charAt(0).toUpperCase();
+    if (profileAvatarLetterEl) profileAvatarLetterEl.textContent = letter;
+    if (profileAvatarPreviewEl) profileAvatarPreviewEl.classList.add("hidden");
+    if (profileAvatarLetterEl) profileAvatarLetterEl.classList.remove("hidden");
+  }
+
+  if (profileDisplayNameEl) profileDisplayNameEl.textContent = state.profile.nickname;
+  if (profileUserIdEl) profileUserIdEl.textContent = `@${displayId}`;
+  if (profileIdInputEl) profileIdInputEl.value = displayId;
+  if (settingsAuthEmailEl) settingsAuthEmailEl.textContent = email;
+  if (settingsAuthProviderEl) settingsAuthProviderEl.textContent = providerLabel;
+  if (brandUserNameEl) brandUserNameEl.textContent = state.profile.nickname;
+  if (profileNicknameInputEl) profileNicknameInputEl.value = state.profile.nickname;
+
+  if (brandAvatarFallbackEl && !activeAvatar) {
+    brandAvatarFallbackEl.textContent = state.profile.nickname.charAt(0).toUpperCase();
+  }
+}
+
+async function initAuth() {
+  // Listen for local OAuth receiver event (for seamless Google login)
+  listen("oauth-login", async (event) => {
+    console.log("[auth] Google OAuth event received:", event.payload);
+    const { access_token, refresh_token, code } = event.payload;
+    try {
+      if (code) {
+        console.log("[auth] Exchanging auth code for session...");
+        const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+        if (error) throw error;
+        if (data?.session) {
+          console.log("[auth] Google session established successfully via PKCE!");
+          authOverlayEl?.classList.add("hidden");
+          populateProfilePanel(data.session);
+        }
+      } else if (access_token) {
+        console.log("[auth] Setting session via implicit flow...");
+        const { data, error } = await supabase.auth.setSession({
+          access_token,
+          refresh_token: refresh_token || ""
+        });
+        if (error) throw error;
+        if (data?.session) {
+          console.log("[auth] Google session established successfully via Implicit!");
+          authOverlayEl?.classList.add("hidden");
+          populateProfilePanel(data.session);
+        }
+      }
+    } catch (error) {
+      showAuthError("Ошибка при входе: " + error.message);
+    }
+    // Restore button state
+    if (btnGoogleEl) {
+      btnGoogleEl.disabled = false;
+      btnGoogleEl.innerHTML = originalGoogleBtnHtml;
+    }
+  });
+
+  // 1. Explicitly check for access_token in hash (Implicit Flow) for robust Tauri login
+  if (window.location.hash && window.location.hash.includes("access_token=")) {
+    try {
+      const hashParams = new URLSearchParams(window.location.hash.substring(1));
+      const accessToken = hashParams.get("access_token");
+      const refreshToken = hashParams.get("refresh_token");
+      if (accessToken) {
+        const { data, error } = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken || ""
+        });
+        if (error) {
+          console.error("[auth] Failed to explicitly set session:", error);
+        } else if (data?.session) {
+          console.log("[auth] Explicitly set session successfully:", data.session);
+          authOverlayEl?.classList.add("hidden");
+          populateProfilePanel(data.session);
+        }
+      }
+      // Clean up hash from URL to keep it clean and prevent re-triggering
+      window.history.replaceState(null, null, window.location.pathname);
+    } catch (e) {
+      console.error("[auth] Error parsing hash params:", e);
+    }
+  }
+
+  // Parse error parameters from URL (e.g. from failed Google OAuth redirect)
+  const urlParams = new URLSearchParams(window.location.search || (window.location.hash.includes("?") ? window.location.hash.substring(window.location.hash.indexOf("?")) : ""));
+  const authError = urlParams.get("error_description") || urlParams.get("error");
+  if (authError) {
+    let friendlyError = authError.replace(/\+/g, " ");
+    if (authError.includes("bad_oauth_state") || authError.includes("OAuth state not found")) {
+      friendlyError = "Ошибка авторизации через Google: Не совпадает порт перенаправления. Пожалуйста, зайдите в настройки Supabase Dashboard -> Authentication -> Redirect URLs и добавьте туда адрес '" + window.location.origin + "/'";
+    }
+    showAuthError(friendlyError);
+  }
+
+  // Check current session
+  const guestData = localStorage.getItem("p2p-guest-session");
+  if (guestData) {
+    authOverlayEl?.classList.add("hidden");
+    populateProfilePanel(JSON.parse(guestData));
+  } else {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session) {
+      authOverlayEl?.classList.add("hidden");
+      populateProfilePanel(session);
+    } else {
+      authOverlayEl?.classList.remove("hidden");
+    }
+  }
+
+  // Listen for changes
+  supabase.auth.onAuthStateChange((event, session) => {
+    if (localStorage.getItem("p2p-guest-session")) return;
+    if (session) {
+      authOverlayEl?.classList.add("hidden");
+      populateProfilePanel(session);
+    } else {
+      authOverlayEl?.classList.remove("hidden");
+    }
+  });
+
+  // Profile menu open/close
+  profileMenuTriggerEl?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setPage("profile");
+  });
+
+  // Copy User ID on click (uses storedDisplayId, updates textContent briefly)
+  profileUserIdEl?.addEventListener("click", async () => {
+    if (!storedDisplayId) return;
+    await navigator.clipboard.writeText(storedDisplayId).catch(() => {});
+    const orig = profileUserIdEl.textContent;
+    profileUserIdEl.textContent = "Скопировано!";
+    setTimeout(() => { if (profileUserIdEl.textContent === "Скопировано!") profileUserIdEl.textContent = orig; }, 1500);
+  });
+
+  // ===== UNIFIED INLINE EDITING =====
+  // Only one field can be edited at a time.
+  currentEditingField = null; // 'name' | 'id' | null
+
+  function closeAllEditing() {
+    if (currentEditingField === "name") {
+      profileDisplayNameEl?.classList.remove("hidden");
+      profileNicknameInputEl?.classList.add("hidden");
+      nameConfirmActionsEl?.classList.add("hidden");
+      editNameBtnEl?.classList.remove("hidden"); // Show pencil back
+    } else if (currentEditingField === "id") {
+      profileUserIdEl?.classList.remove("hidden");
+      profileIdInputEl?.classList.add("hidden");
+      idConfirmActionsEl?.classList.add("hidden");
+      editIdBtnEl?.classList.remove("hidden"); // Show pencil back
+    }
+    currentEditingField = null;
+  }
+
+  function openNameEdit() {
+    closeAllEditing();
+    currentEditingField = "name";
+    // Always pre-populate with the currently displayed name to avoid reverting to "Player"
+    if (profileNicknameInputEl && profileDisplayNameEl) {
+      profileNicknameInputEl.value = profileDisplayNameEl.textContent.trim();
+    }
+    profileDisplayNameEl?.classList.add("hidden");
+    profileNicknameInputEl?.classList.remove("hidden");
+    nameConfirmActionsEl?.classList.remove("hidden");
+    editNameBtnEl?.classList.add("hidden"); // Hide the pencil icon during edit
+    profileNicknameInputEl?.focus();
+    if (profileNicknameInputEl) {
+      const len = profileNicknameInputEl.value.length;
+      profileNicknameInputEl.setSelectionRange(len, len);
+    }
+  }
+
+  async function saveNameEdit() {
+    const newNick = profileNicknameInputEl?.value?.trim();
+    if (newNick && newNick !== state.profile.nickname) {
+      state.profile.nickname = newNick;
+      saveProfileState();
+      if (brandUserNameEl) brandUserNameEl.textContent = newNick;
+      if (profileDisplayNameEl) profileDisplayNameEl.textContent = newNick;
+      await updateProfileData({ custom_nickname: newNick });
+    }
+    closeAllEditing();
+  }
+
+  function openIdEdit() {
+    closeAllEditing();
+    currentEditingField = "id";
+    // Use storedDisplayId — NOT textContent which may say "Скопировано!"
+    if (profileIdInputEl) {
+      profileIdInputEl.value = storedDisplayId || profileUserIdEl?.textContent?.replace(/^@/, "").trim() || "";
+    }
+    profileUserIdEl?.classList.add("hidden");
+    profileIdInputEl?.classList.remove("hidden");
+    idConfirmActionsEl?.classList.remove("hidden");
+    editIdBtnEl?.classList.add("hidden"); // Hide the pencil icon during edit
+    profileIdInputEl?.focus();
+    if (profileIdInputEl) {
+      const len = profileIdInputEl.value.length;
+      profileIdInputEl.setSelectionRange(len, len);
+    }
+  }
+
+  async function saveIdEdit() {
+    const newId = profileIdInputEl?.value?.trim().replace(/\s+/g, "_").toLowerCase();
+    if (newId && newId !== storedDisplayId) {
+      storedDisplayId = newId;
+      state.profile.customId = newId;
+      saveProfileState();
+      if (profileUserIdEl) profileUserIdEl.textContent = `@${newId}`;
+      await updateProfileData({ custom_id: newId });
+    }
+    closeAllEditing();
+  }
+
+  // Name edit handlers
+  profileDisplayNameEl?.addEventListener("click", () => {
+    openNameEdit();
+  });
+  editNameBtnEl?.addEventListener("click", () => {
+    currentEditingField === "name" ? saveNameEdit() : openNameEdit();
+  });
+  saveNameBtnEl?.addEventListener("click", () => saveNameEdit());
+  cancelNameBtnEl?.addEventListener("click", () => closeAllEditing());
+  profileNicknameInputEl?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") saveNameEdit();
+    if (e.key === "Escape") closeAllEditing();
+  });
+
+  // ID edit handlers
+  editIdBtnEl?.addEventListener("click", () => {
+    currentEditingField === "id" ? saveIdEdit() : openIdEdit();
+  });
+  saveIdBtnEl?.addEventListener("click", () => saveIdEdit());
+  cancelIdBtnEl?.addEventListener("click", () => closeAllEditing());
+  profileIdInputEl?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") saveIdEdit();
+    if (e.key === "Escape") closeAllEditing();
+  });
+
+  editAvatarBtnEl?.addEventListener("click", () => profileAvatarFileEl?.click());
+  profileAvatarFileEl?.addEventListener("change", () => {
+    const file = profileAvatarFileEl.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = reader.result;
+      if (profileAvatarPreviewEl) {
+        profileAvatarPreviewEl.src = base64;
+        profileAvatarPreviewEl.classList.remove("hidden");
+      }
+      if (profileAvatarLetterEl) profileAvatarLetterEl.classList.add("hidden");
+      if (brandAvatarImageEl) {
+        brandAvatarImageEl.src = base64;
+        brandAvatarImageEl.classList.remove("hidden");
+      }
+      if (brandAvatarFallbackEl) brandAvatarFallbackEl.classList.add("hidden");
+      
+      state.profile.avatarDataUrl = base64;
+      saveProfileState();
+      
+      // Save to supabase metadata so it persists
+      await updateProfileData({ custom_avatar: base64 });
+    };
+    reader.readAsDataURL(file);
+  });
+
+  // Choose banner
+  editBannerBtnEl?.addEventListener("click", () => profileBannerFileEl?.click());
+  profileBannerFileEl?.addEventListener("change", () => {
+    const file = profileBannerFileEl.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = reader.result;
+      if (socialBannerImgEl) {
+        socialBannerImgEl.src = base64;
+        socialBannerImgEl.classList.remove("hidden");
+      }
+      
+      state.profile.customBanner = base64;
+      saveProfileState();
+      
+      // Save to supabase metadata
+      await updateProfileData({ custom_banner: base64 });
+    };
+    reader.readAsDataURL(file);
+  });
+
+  // Toggle Mode
+  btnToggleModeEl?.addEventListener("click", () => {
+    if (authMode === "register") {
+      authMode = "login";
+      if (authTitleEl) authTitleEl.textContent = "Вход";
+      if (authSubtitleEl) authSubtitleEl.textContent = "Авторизуйтесь, чтобы продолжить";
+      if (btnAuthSubmitEl) btnAuthSubmitEl.textContent = "Войти";
+      if (btnToggleModeEl) btnToggleModeEl.textContent = "Нет аккаунта? Зарегистрироваться";
+    } else {
+      authMode = "register";
+      if (authTitleEl) authTitleEl.textContent = "Регистрация";
+      if (authSubtitleEl) authSubtitleEl.textContent = "Создайте аккаунт, чтобы продолжить";
+      if (btnAuthSubmitEl) btnAuthSubmitEl.textContent = "Зарегистрироваться";
+      if (btnToggleModeEl) btnToggleModeEl.textContent = "Уже есть аккаунт? Войти";
+    }
+    authErrorEl?.classList.add("hidden");
+  });
+
+  // Handle Form Submit
+  authFormEl?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    authErrorEl?.classList.add("hidden");
+    const email = authEmailEl.value;
+    const password = authPasswordEl.value;
+    
+    if (authMode === "login") {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) showAuthError(error.message);
+    } else {
+      if (!email || !password || password.length < 6) {
+        showAuthError("Пожалуйста, введите email и пароль (минимум 6 символов).");
+        return;
+      }
+      const { error } = await supabase.auth.signUp({ email, password });
+      if (error) {
+        showAuthError(error.message);
+      } else {
+        showAuthError("Успешная регистрация! Проверьте email для подтверждения, либо войдите, если подтверждение отключено.");
+        authErrorEl.style.background = "rgba(99, 232, 155, 0.15)";
+        authErrorEl.style.borderColor = "var(--success)";
+        authErrorEl.style.color = "var(--success)";
+      }
+    }
+  });
+
+  // Handle Guest Auth
+  btnGuestEl?.addEventListener("click", () => {
+    const guestId = "guest_" + Math.random().toString(36).substring(2, 10);
+    const guestSession = {
+      user: {
+        id: guestId,
+        email: "guest@local.host",
+        app_metadata: { provider: "Гостевой аккаунт" },
+        user_metadata: {
+          custom_nickname: "Гость " + Math.floor(Math.random() * 1000),
+        }
+      }
+    };
+    localStorage.setItem("p2p-guest-session", JSON.stringify(guestSession));
+    authOverlayEl?.classList.add("hidden");
+    populateProfilePanel(guestSession);
+  });
+
+  // Handle Google Auth
+  btnGoogleEl?.addEventListener("click", async () => {
+    try {
+      if (btnGoogleEl) {
+        btnGoogleEl.disabled = true;
+        btnGoogleEl.innerHTML = `
+          <svg style="animation: spin 1s linear infinite;" width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <style>
+              @keyframes spin {
+                from { transform: rotate(0deg); }
+                to { transform: rotate(360deg); }
+              }
+            </style>
+            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-dasharray="31.4 31.4" fill="none" opacity="0.3"></circle>
+            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-dasharray="15 30" fill="none"></circle>
+          </svg>
+          Ожидание авторизации в браузере...
+        `;
+      }
+
+      // 1. Start the temporary OAuth server in Rust (fixed port 14235)
+      await invoke("start_oauth_server");
+      console.log("[auth] Local OAuth server started on port 14235");
+
+      // 2. Initiate Google OAuth via Supabase and get the authorization URL
+      // We use the local Rust server as the redirect target
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: 'http://localhost:14235/callback',
+          skipBrowserRedirect: true
+        }
+      });
+
+      if (error) throw error;
+      if (!data?.url) throw new Error("Не удалось получить URL для авторизации");
+
+      console.log("[auth] Opening Google OAuth URL in external browser:", data.url);
+
+      // 3. Open the URL in the default browser using Rust open_url command
+      await invoke("open_url", { url: data.url });
+    } catch (err) {
+      console.error("[auth] Google auth initiation failed:", err);
+      showAuthError("Не удалось запустить авторизацию: " + err.message);
+      if (btnGoogleEl) {
+        btnGoogleEl.disabled = false;
+        btnGoogleEl.innerHTML = originalGoogleBtnHtml;
+      }
+    }
+  });
+
+  // Handle Logout
+  btnLogoutEl?.addEventListener("click", async () => {
+    btnLogoutEl.disabled = true;
+    const origText = btnLogoutEl.innerHTML;
+    btnLogoutEl.textContent = "Выход...";
+
+    try {
+      // Try clean signout first
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.warn("[logout] signOut API call failed, forcing local cleanup:", err);
+    }
+
+    // Forcefully clean localStorage except preserved keys
+    const preservedKeys = [
+      "minecraft-p2p-client-id",
+      "minecraft-p2p-profile-v1",
+      "minecraft-p2p-external-servers-v1",
+      "minecraft-p2p-ignored-ports-v1",
+      "minecraft-p2p-theme",
+      "minecraft-p2p-language",
+      "minecraft-p2p-accent"
+    ];
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && !preservedKeys.includes(key)) {
+        localStorage.removeItem(key);
+      }
+    }
+
+    // Clear any leftover supabase auth tokens specifically
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && (key.startsWith("sb-") || key.includes("supabase"))) {
+        localStorage.removeItem(key);
+      }
+    }
+
+    // Clear sessionStorage
+    sessionStorage.clear();
+
+    // Reset local profile state
+    state.profile = {
+      nickname: "Player",
+      avatarDataUrl: null,
+      customId: null,
+      customBanner: null
+    };
+    storedDisplayId = null;
+    saveProfileState();
+
+    // Reset UI to login screen immediately to prevent flickering
+    authOverlayEl?.classList.remove("hidden");
+
+    // Reload with a small timeout to let the storage clear operations commit
+    setTimeout(() => {
+      window.location.reload();
+    }, 100);
+  });
+}
+
+// Initialize Auth
+initAuth();

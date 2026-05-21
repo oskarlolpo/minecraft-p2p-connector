@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Авторизация Minecraft P2P</title>
+  <style>
+    :root {
+      --bg: #05050a;
+      --card-bg: rgba(10, 10, 18, 0.6);
+      --border: rgba(255, 255, 255, 0.08);
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --primary: #3b82f6;
+      --success: #10b981;
+      --error: #ef4444;
+      --accent: rgba(59, 130, 246, 0.15);
+    }
+    
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      overflow: hidden;
+    }
+
+    /* Ambient background glows */
+    .glow {
+      position: absolute;
+      width: 400px;
+      height: 400px;
+      background: radial-gradient(circle, rgba(59, 130, 246, 0.08) 0%, rgba(0, 0, 0, 0) 70%);
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    .card {
+      background: var(--card-bg);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 48px 40px;
+      text-align: center;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.8), inset 0 1px 1px rgba(255, 255, 255, 0.05);
+      max-width: 420px;
+      width: 90%;
+      z-index: 1;
+      transform: translateY(10px);
+      animation: floatIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
+    @keyframes floatIn {
+      to { transform: translateY(0); }
+    }
+
+    h2 {
+      margin-top: 0;
+      margin-bottom: 12px;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+
+    p {
+      color: var(--text-muted);
+      font-size: 15px;
+      line-height: 1.6;
+      margin-top: 0;
+      margin-bottom: 24px;
+    }
+
+    .spinner {
+      border: 3px solid rgba(255, 255, 255, 0.05);
+      border-top: 3px solid var(--primary);
+      border-radius: 50%;
+      width: 48px;
+      height: 48px;
+      animation: spin 1s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+      margin: 0 auto 28px;
+      box-shadow: 0 0 20px rgba(59, 130, 246, 0.2);
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .icon-success {
+      width: 64px;
+      height: 64px;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.2);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+      color: var(--success);
+      font-size: 28px;
+      font-weight: bold;
+      box-shadow: 0 0 30px rgba(16, 185, 129, 0.15);
+      animation: scaleIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    }
+
+    .icon-error {
+      width: 64px;
+      height: 64px;
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+      color: var(--error);
+      font-size: 28px;
+      font-weight: bold;
+      box-shadow: 0 0 30px rgba(239, 68, 68, 0.15);
+      animation: scaleIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    }
+
+    @keyframes scaleIn {
+      from { transform: scale(0); }
+      to { transform: scale(1); }
+    }
+
+    .subtext {
+      font-size: 13px;
+      color: var(--text-muted);
+      border-top: 1px solid var(--border);
+      padding-top: 20px;
+      margin-top: 24px;
+      margin-bottom: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="glow"></div>
+  <div class="card" id="card">
+    <div class="spinner" id="spinner"></div>
+    <h2 id="status-title">Связывание аккаунта...</h2>
+    <p id="status-text">Передаем данные авторизации в приложение Minecraft P2P. Пожалуйста, подождите.</p>
+  </div>
+
+  <script type="module">
+    import { supabase } from "./supabase.js";
+
+    const card = document.getElementById("card");
+    const statusTitle = document.getElementById("status-title");
+    const statusText = document.getElementById("status-text");
+    const spinner = document.getElementById("spinner");
+
+    function showSuccess() {
+      if (spinner) spinner.style.display = "none";
+      card.innerHTML = `
+        <div class="icon-success">✓</div>
+        <h2>Вход выполнен!</h2>
+        <p>Вы успешно авторизовались в системе. Это окно браузера можно безопасно закрыть.</p>
+        <p class="subtext">Вернитесь в приложение Minecraft P2P Connector.</p>
+      `;
+    }
+
+    function showError(message) {
+      if (spinner) spinner.style.display = "none";
+      card.innerHTML = `
+        <div class="icon-error">✕</div>
+        <h2>Ошибка входа</h2>
+        <p style="color: #fca5a5; font-size: 14px; margin-bottom: 16px;">${message}</p>
+        <p>Пожалуйста, закройте это окно и попробуйте войти снова в приложении.</p>
+      `;
+    }
+
+    // Subscribe to auth state changes. This is the primary driver because Supabase SDK 
+    // automatically detects the code in the URL and performs the exchange during initialization.
+    supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log("[callback] Auth state changed:", event, session ? "Session exists" : "No session");
+      if (session) {
+        sendTokensToTauri(session.access_token, session.refresh_token);
+      }
+    });
+
+    async function handleAuth() {
+      const searchParams = new URLSearchParams(window.location.search);
+      const action = searchParams.get("action");
+      const code = searchParams.get("code");
+      const error = searchParams.get("error") || searchParams.get("error_description");
+      const hash = window.location.hash;
+
+      console.log("[callback] Handling action/URL params:", { action, code, error, hash });
+
+      // 1. Handle error response from Supabase
+      if (error) {
+        showError("Ошибка авторизации: " + decodeURIComponent(error).replace(/\+/g, " "));
+        return;
+      }
+
+      // 2. Action: Initiate Google Login in system browser context
+      if (action === "login") {
+        if (statusTitle) statusTitle.textContent = "Перенаправление...";
+        if (statusText) statusText.textContent = "Устанавливаем безопасное соединение с Google. Пожалуйста, подождите.";
+        try {
+          const { error: signInError } = await supabase.auth.signInWithOAuth({
+            provider: 'google',
+            options: {
+              redirectTo: 'http://localhost:3000/callback.html'
+            }
+          });
+          if (signInError) {
+            showError("Не удалось начать авторизацию: " + signInError.message);
+          }
+        } catch (err) {
+          showError("Ошибка при запуске OAuth: " + err.message);
+        }
+        return;
+      }
+
+      // 3. Action: Handle callback (either via code or hash)
+      if (code || hash) {
+        if (statusTitle) statusTitle.textContent = "Подтверждение входа...";
+        if (statusText) statusText.textContent = "Завершаем авторизацию и связываем аккаунт...";
+        
+        // Give the automatic detectSessionInUrl exchange a moment to complete, or force getSession
+        setTimeout(async () => {
+          try {
+            const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+            if (sessionError) {
+              showError("Ошибка получения сессии: " + sessionError.message);
+              return;
+            }
+            if (session) {
+              sendTokensToTauri(session.access_token, session.refresh_token);
+            } else {
+              // If auto-detection didn't pick it up or failed, try explicit exchange as a fallback
+              if (code) {
+                console.log("[callback] Fallback: Initiating manual code exchange...");
+                const { data: exchangeData, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+                if (exchangeError) {
+                  showError("Ошибка обмена кода на сессию: " + exchangeError.message);
+                  return;
+                }
+                if (exchangeData && exchangeData.session) {
+                  sendTokensToTauri(exchangeData.session.access_token, exchangeData.session.refresh_token);
+                } else {
+                  showError("Не удалось получить сессию после ручного обмена.");
+                }
+              } else {
+                showError("Не удалось обнаружить активную сессию авторизации.");
+              }
+            }
+          } catch (err) {
+            showError("Ошибка при обработке входа: " + err.message);
+          }
+        }, 500); // 500ms delay is perfect to let auto-exchange finish
+        return;
+      }
+
+      // 4. Default check if we are already logged in
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          sendTokensToTauri(session.access_token, session.refresh_token);
+        } else {
+          showError("Неверный запрос авторизации. Попробуйте войти заново из приложения.");
+        }
+      } catch (err) {
+        showError("Неверный запрос авторизации.");
+      }
+    }
+
+    let isSending = false;
+    function sendTokensToTauri(accessToken, refreshToken) {
+      if (isSending) return; // Prevent multiple requests if state change fires multiple times
+      isSending = true;
+
+      if (statusTitle) statusTitle.textContent = "Связывание аккаунта...";
+      if (statusText) statusText.textContent = "Передаем сессию авторизации в локальное приложение...";
+      
+      console.log("[callback] Sending tokens to Tauri on port 14235 via POST...");
+      fetch("http://localhost:14235/token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/plain"
+        },
+        body: JSON.stringify({
+          access_token: accessToken,
+          refresh_token: refreshToken || ""
+        })
+      })
+        .then(res => {
+          if (res.ok) {
+            showSuccess();
+          } else {
+            isSending = false;
+            showError("Локальное приложение отклонило токен авторизации.");
+          }
+        })
+        .catch(err => {
+          console.error(err);
+          isSending = false;
+          showError("Не удалось передать сессию в Minecraft P2P. Пожалуйста, убедитесь, что приложение открыто и готово к приему данных.");
+        });
+    }
+
+    // Run the flow
+    handleAuth();
+  </script>
+</body>
+</html>

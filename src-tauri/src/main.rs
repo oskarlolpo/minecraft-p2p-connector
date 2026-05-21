@@ -24,8 +24,9 @@ use models::{
 };
 use network::stun::NatTypeResult;
 use std::{path::PathBuf, process::Command, time::{SystemTime, UNIX_EPOCH}};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, State, Emitter};
 use tokio::sync::Mutex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const RELEASES_API_URL: &str =
     "https://api.github.com/repos/oskarlolpo/minecraft-p2p-connector/releases/latest";
@@ -155,7 +156,7 @@ async fn connect_to_peer(
     let peer_addr = peer_addrs
         .iter()
         .find_map(|value| multiaddr_or_socket_to_socket(value))
-        .ok_or_else(|| "не удалось извлечь socket address из peerAddrs".to_string())?;
+        .ok_or_else(|| "РЅРµ СѓРґР°Р»РѕСЃСЊ РёР·РІР»РµС‡СЊ socket address РёР· peerAddrs".to_string())?;
 
     state
         .manager
@@ -178,7 +179,7 @@ async fn prepare_client_connect(
     let peer_addr = peer_addrs
         .iter()
         .find_map(|value| multiaddr_or_socket_to_socket(value))
-        .ok_or_else(|| "не удалось извлечь socket address из peerAddrs".to_string())?;
+        .ok_or_else(|| "РЅРµ СѓРґР°Р»РѕСЃСЊ РёР·РІР»РµС‡СЊ socket address РёР· peerAddrs".to_string())?;
 
     state
         .manager
@@ -435,7 +436,7 @@ async fn install_update_impl() -> anyhow::Result<InstallUpdateResult> {
     let update = check_for_updates_impl().await?;
     if !update.available {
         return Ok(InstallUpdateResult {
-            message: "Обновлений нет.".into(),
+            message: "РћР±РЅРѕРІР»РµРЅРёР№ РЅРµС‚.".into(),
         });
     }
 
@@ -463,7 +464,7 @@ async fn install_update_impl() -> anyhow::Result<InstallUpdateResult> {
     launch_file_detached(&temp_path)?;
 
     Ok(InstallUpdateResult {
-        message: format!("Установщик загружен и запущен: {}", temp_path.display()),
+        message: format!("РЈСЃС‚Р°РЅРѕРІС‰РёРє Р·Р°РіСЂСѓР¶РµРЅ Рё Р·Р°РїСѓС‰РµРЅ: {}", temp_path.display()),
     })
 }
 
@@ -506,7 +507,9 @@ fn main() {
             export_diagnostics_snapshot,
             get_available_lan_ports_command,
             detect_nat_type_command,
-            preflight_port_check_command
+            preflight_port_check_command,
+            open_url,
+            start_oauth_server
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -581,3 +584,272 @@ fn launch_file_detached(path: &PathBuf) -> anyhow::Result<()> {
     Err(anyhow::anyhow!("update installation is only supported on Windows"))
 }
 
+#[derive(serde::Serialize, Clone)]
+struct OAuthPayload {
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+    code: Option<String>,
+}
+
+#[tauri::command]
+async fn open_url(url: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        Command::new("cmd")
+            .args(["/C", "start", "", &url])
+            .creation_flags(0x0800_0000)
+            .spawn()
+            .map_err(|e| format!("Failed to open URL: {e}"))?;
+        return Ok(());
+    }
+    
+    #[allow(unreachable_code)]
+    Err("Opening URL is only supported on Windows".into())
+}
+
+#[tauri::command]
+async fn start_oauth_server(app: AppHandle) -> Result<u16, String> {
+    let port: u16 = 14235;
+    // Try binding; if port busy (e.g. previous session still running), just return ok
+    let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await {
+        Ok(l) => l,
+        Err(_) => {
+            println!("[auth-server] Port {port} already in use вЂ” assuming server already running");
+            return Ok(port);
+        }
+    };
+    
+    let app_clone = app.clone();
+    tokio::spawn(async move {
+        let mut access_token = String::new();
+        let mut refresh_token = String::new();
+        let mut code = String::new();
+        
+        let server_future = async {
+            loop {
+                let (mut stream, _) = match listener.accept().await {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                
+                let mut request_bytes = Vec::new();
+                let mut temp_buf = [0u8; 4096];
+                let mut headers_length = 0usize;
+                let mut content_length = 0usize;
+                let mut is_post = false;
+                
+                println!("[auth-server] New TCP client connected. Reading data...");
+                loop {
+                    match tokio::time::timeout(
+                        tokio::time::Duration::from_millis(1500),
+                        stream.read(&mut temp_buf)
+                    ).await {
+                        Ok(Ok(0)) => {
+                            println!("[auth-server] Stream EOF reached.");
+                            break;
+                        },
+                        Ok(Ok(n)) => {
+                            request_bytes.extend_from_slice(&temp_buf[..n]);
+                            
+                            if headers_length == 0 {
+                                if let Some(pos) = request_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                                    headers_length = pos + 4;
+                                    let headers_str = String::from_utf8_lossy(&request_bytes[..headers_length]);
+                                    is_post = headers_str.starts_with("POST ");
+                                    
+                                    for line in headers_str.lines() {
+                                        if line.to_lowercase().starts_with("content-length:") {
+                                            if let Some(val) = line.split(':').nth(1) {
+                                                content_length = val.trim().parse::<usize>().unwrap_or(0);
+                                            }
+                                        }
+                                    }
+                                    println!("[auth-server] Headers read. is_post: {}, Content-Length: {}", is_post, content_length);
+                                }
+                            }
+                            
+                            if headers_length > 0 {
+                                if is_post {
+                                    let body_len = request_bytes.len() - headers_length;
+                                    if body_len >= content_length {
+                                        println!("[auth-server] Read entire POST body ({} >= {} bytes). Breaking.", body_len, content_length);
+                                        break;
+                                    }
+                                } else {
+                                    println!("[auth-server] Read GET/OPTIONS headers. Breaking.");
+                                    break;
+                                }
+                            }
+                            
+                            if request_bytes.len() > 1024 * 1024 { // 1 MB limit
+                                println!("[auth-server] Request exceeds 1MB limit. Breaking.");
+                                break;
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            println!("[auth-server] Stream read error: {}", e);
+                            break;
+                        }
+                        Err(_) => {
+                            println!("[auth-server] Timeout reading next chunk. headers_length: {}, is_post: {}, content_length: {}, current_len: {}", 
+                                     headers_length, is_post, content_length, request_bytes.len());
+                            break;
+                        }
+                    }
+                }
+                
+                let request = String::from_utf8_lossy(&request_bytes).to_string();
+                let first_line = request.lines().next().unwrap_or("");
+                let method = first_line.split_whitespace().next().unwrap_or("");
+                let path_and_query = first_line.split_whitespace().nth(1).unwrap_or("");
+                let (req_path, query_str) = if let Some(q_pos) = path_and_query.find('?') {
+                    (&path_and_query[..q_pos], &path_and_query[q_pos+1..])
+                } else {
+                    (path_and_query, "")
+                };
+                println!("[auth-server] Method: '{}', Path: '{}'", method, req_path);
+
+                // URL decode helper
+                fn url_decode(s: &str) -> String {
+                    let mut out = String::new();
+                    let bytes = s.as_bytes();
+                    let mut i = 0;
+                    while i < bytes.len() {
+                        if bytes[i] == b'%' && i + 2 < bytes.len() {
+                            if let Ok(hex) = std::str::from_utf8(&bytes[i+1..i+3]) {
+                                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                                    out.push(byte as char); i += 3; continue;
+                                }
+                            }
+                        } else if bytes[i] == b'+' {
+                            out.push(' '); i += 1; continue;
+                        }
+                        out.push(bytes[i] as char); i += 1;
+                    }
+                    out
+                }
+                fn get_param(qs: &str, key: &str) -> Option<String> {
+                    for part in qs.split('&') {
+                        let mut kv = part.splitn(2, '=');
+                        if kv.next() == Some(key) {
+                            return Some(url_decode(kv.next().unwrap_or("")));
+                        }
+                    }
+                    None
+                }
+
+                // CORS preflight
+                if method == "OPTIONS" {
+                    let r = "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nConnection: close\r\n\r\n";
+                    let _ = stream.write_all(r.as_bytes()).await;
+                    println!("[auth-server] Answered OPTIONS preflight");
+                    continue;
+                }
+
+                // /callback вЂ” primary OAuth redirect from browser
+                if req_path == "/callback" || req_path.starts_with("/callback") {
+                    // Check for error
+                    if let Some(err) = get_param(query_str, "error").or_else(|| get_param(query_str, "error_description")) {
+                        println!("[auth-server] OAuth error: {}", err);
+                        let body = format!("<html><body style='background:#05050a;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'><div style='text-align:center;padding:40px;background:rgba(10,10,18,.6);border-radius:24px;max-width:400px'><h2>РћС€РёР±РєР° РІС…РѕРґР°</h2><p style='color:#fca5a5'>{}</p><p style='color:#9ca3af'>Р—Р°РєСЂРѕР№С‚Рµ СЌС‚Рѕ РѕРєРЅРѕ Рё РїРѕРїСЂРѕР±СѓР№С‚Рµ РµС‰С‘ СЂР°Р·.</p></div></body></html>", err);
+                        let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                        continue;
+                    }
+
+                    // Extract auth code (PKCE flow) вЂ” this is the primary path
+                    if let Some(c) = get_param(query_str, "code") {
+                        code = c;
+                        println!("[auth-server] Got PKCE auth code (len: {}). Emitting oauth-login...", code.len());
+                    }
+                    // Fallback: implicit flow with access_token in query
+                    if let Some(at) = get_param(query_str, "access_token") {
+                        access_token = at;
+                        refresh_token = get_param(query_str, "refresh_token").unwrap_or_default();
+                        println!("[auth-server] Got access_token in query (len: {})", access_token.len());
+                    }
+
+                    if !code.is_empty() || !access_token.is_empty() {
+                        // Send success page to browser
+                        let success = r#"<html><head><meta charset='UTF-8'><title>Вход выполнен</title><style>body{background:#05050a;color:#f3f4f6;font-family:'Inter',sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}.c{background:rgba(10,10,18,.6);border:1px solid rgba(255,255,255,.08);border-radius:24px;padding:48px 40px;text-align:center;max-width:420px;width:90%}.i{width:64px;height:64px;background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 24px;color:#10b981;font-size:28px;animation:s .5s cubic-bezier(.34,1.56,.64,1) forwards}@keyframes s{from{transform:scale(0)}to{transform:scale(1)}}p{color:#9ca3af;font-size:15px;line-height:1.6;margin:0 0 16px}</style></head><body><div class='c'><div class='i'>✓</div><h2>Вход выполнен!</h2><p>Вы успешно авторизовались. Это окно браузера можно закрыть.</p><p style='font-size:13px;border-top:1px solid rgba(255,255,255,.08);padding-top:16px'>Вернитесь в Minecraft P2P Connector.</p></div></body></html>"#;
+                        let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", success.len(), success);
+                        let _ = stream.write_all(resp.as_bytes()).await;
+
+                        let payload = OAuthPayload {
+                            access_token: if access_token.is_empty() { None } else { Some(access_token.clone()) },
+                            refresh_token: if refresh_token.is_empty() { None } else { Some(refresh_token.clone()) },
+                            code: if code.is_empty() { None } else { Some(code.clone()) },
+                        };
+                        if let Err(e) = app_clone.emit("oauth-login", payload) {
+                            eprintln!("[auth-server] ERROR emitting oauth-login: {}", e);
+                        }
+                        println!("[auth-server] oauth-login emitted вЂ” server stopping.");
+                        break;
+                    }
+
+                    // No code/token in query вЂ” serve a page that reads hash fragment (implicit fallback)
+                    let hash_page = r#"<html><head><meta charset='UTF-8'><style>body{background:#05050a;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}.s{border:3px solid rgba(255,255,255,.05);border-top:3px solid #3b82f6;border-radius:50%;width:48px;height:48px;animation:sp 1s linear infinite;margin:0 auto 24px}@keyframes sp{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}.c{background:rgba(10,10,18,.6);border:1px solid rgba(255,255,255,.08);border-radius:24px;padding:48px 40px;text-align:center;max-width:420px}p{color:#9ca3af}</style></head><body><div class='c'><div class='s'></div><h2>Обработка...</h2><p>Пожалуйста, подождите.</p></div><script>const h=window.location.hash;if(h&&h.includes('access_token=')){const p=new URLSearchParams(h.slice(1));const at=p.get('access_token');const rt=p.get('refresh_token')||'';if(at){fetch('http://localhost:14235/token?access_token='+encodeURIComponent(at)+'&refresh_token='+encodeURIComponent(rt)).catch(()=>{});}}</script></body></html>"#;
+                    let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", hash_page.len(), hash_page);
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                    println!("[auth-server] No code in /callback query вЂ” served hash-detection page");
+                    continue;
+                }
+
+                // /token fallback for implicit flow (hash fragment via JS fetch)
+                if req_path == "/token" || req_path.starts_with("/token") {
+                    println!("[auth-server] /token fallback: {}", &query_str[..query_str.len().min(60)]);
+                    if method == "POST" && headers_length > 0 {
+                        let body_str = &request[headers_length..];
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(body_str) {
+                            if let Some(at) = json.get("access_token").and_then(|v| v.as_str()) {
+                                access_token = at.to_string();
+                            }
+                            if let Some(rt) = json.get("refresh_token").and_then(|v| v.as_str()) {
+                                refresh_token = rt.to_string();
+                            }
+                            if let Some(c) = json.get("code").and_then(|v| v.as_str()) {
+                                code = c.to_string();
+                            }
+                        }
+                    } else {
+                        if let Some(at) = get_param(query_str, "access_token") {
+                            access_token = at;
+                            refresh_token = get_param(query_str, "refresh_token").unwrap_or_default();
+                        }
+                        if let Some(c) = get_param(query_str, "code") {
+                            code = c;
+                        }
+                    }
+                    let resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                    if !access_token.is_empty() || !code.is_empty() {
+                        let payload = OAuthPayload {
+                            access_token: if access_token.is_empty() { None } else { Some(access_token.clone()) },
+                            refresh_token: if refresh_token.is_empty() { None } else { Some(refresh_token.clone()) },
+                            code: if code.is_empty() { None } else { Some(code.clone()) },
+                        };
+                        if let Err(e) = app_clone.emit("oauth-login", payload) {
+                            eprintln!("[auth-server] ERROR emitting oauth-login via /token: {}", e);
+                        }
+                        println!("[auth-server] oauth-login emitted via /token fallback.");
+                        break;
+                    }
+                    continue;
+                }
+
+                // Unknown path
+                let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nNot found";
+                let _ = stream.write_all(resp.as_bytes()).await;
+                println!("[auth-server] 404 for path: '{}'", req_path);
+                continue;
+
+            }
+        };
+        
+        let _ = tokio::time::timeout(tokio::time::Duration::from_secs(180), server_future).await;
+        println!("[auth-server] Server task finished.");
+    });
+    
+    Ok(port)
+}
