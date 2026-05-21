@@ -1455,6 +1455,7 @@ function hydrateServers(members) {
         external: false,
       };
     })
+    .filter((server) => server.clientId !== localClientId)
     .filter((server) => Boolean(server.peerId) && (server.peerAddrs.length > 0 || Boolean(server.peerAddr)));
 
   mergeServers(presenceServers);
@@ -2245,6 +2246,17 @@ await listen("test_server_client_closed", async (event) => {
 
 await listen("relay_active", async (event) => {
   addLog(`Relay active: ${event.payload?.relayAddr ?? "n/a"}`);
+});
+
+await listen("peer-health", async (event) => {
+  const { peer_id, ping_ms } = event.payload;
+  if (state.status && state.status.peers) {
+    const peer = state.status.peers.find(p => p.peer_id === peer_id);
+    if (peer) {
+      peer.ping_ms = ping_ms;
+      renderPeers(state.status.peers);
+    }
+  }
 });
 
 await listen("hole_punch_success", async (event) => {

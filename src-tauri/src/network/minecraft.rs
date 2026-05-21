@@ -721,7 +721,31 @@ fn hidden_command(program: &str) -> Command {
     command
 }
 
+fn detect_nickname_from_running_processes() -> Option<MinecraftNicknameDetection> {
+    let processes = collect_java_process_metadata();
+    for meta in processes.values() {
+        let cmd = &meta.command_line;
+        if let Some(idx) = cmd.find("--username ") {
+            let start = idx + 11;
+            let substr = &cmd[start..];
+            let end = substr.find(' ').unwrap_or(substr.len());
+            let raw_nick = substr[..end].trim_matches(|c| c == '"' || c == '\'');
+            if let Some(nick) = sanitize_minecraft_nickname(raw_nick) {
+                return Some(MinecraftNicknameDetection {
+                    nickname: nick,
+                    source_path: format!("running process (pid {})", meta.pid),
+                });
+            }
+        }
+    }
+    None
+}
+
 fn detect_minecraft_nickname_blocking() -> Result<MinecraftNicknameDetection> {
+    if let Some(detection) = detect_nickname_from_running_processes() {
+        return Ok(detection);
+    }
+
     let candidates = collect_nickname_sources();
     for path in candidates {
         if !path.exists() {

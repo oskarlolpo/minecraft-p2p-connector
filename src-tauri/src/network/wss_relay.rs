@@ -389,11 +389,14 @@ async fn handle_host_frame(
 pub async fn start_client_runtime(
     config: WssRelayConfig,
     cancel: CancellationToken,
-) -> Result<WssRelayRuntime> {
+) -> Result<(WssRelayRuntime, u16)> {
+    let temp_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let local_port = temp_listener.local_addr()?.port();
+    drop(temp_listener);
     // Verify connectivity and handshake before returning
     let (ready_tx, ready_rx) = oneshot::channel::<Result<()>>();
 
-    let join_handle = tokio::spawn(client_loop(config, cancel, Some(ready_tx)));
+    let join_handle = tokio::spawn(client_loop(config, local_port, cancel, Some(ready_tx)));
 
     // Wait for the relay to become ready (or fail fast)
     timeout(READY_TIMEOUT, ready_rx)
@@ -401,11 +404,12 @@ pub async fn start_client_runtime(
         .context("WSS relay client ready timed out")?
         .context("WSS relay client ready channel dropped")??;
 
-    Ok(WssRelayRuntime { join_handle })
+    Ok((WssRelayRuntime { join_handle }, local_port))
 }
 
 async fn client_loop(
     config: WssRelayConfig,
+    local_port: u16,
     cancel: CancellationToken,
     mut ready_signal: Option<oneshot::Sender<Result<()>>>,
 ) -> Result<()> {
@@ -414,7 +418,7 @@ async fn client_loop(
             return Ok(());
         }
 
-        let result = client_session(&config, cancel.clone(), &mut ready_signal).await;
+        let result = client_session(&config, local_port, cancel.clone(), &mut ready_signal).await;
 
         if cancel.is_cancelled() {
             return Ok(());
@@ -438,6 +442,7 @@ async fn client_loop(
 
 async fn client_session(
     config: &WssRelayConfig,
+    local_port: u16,
     cancel: CancellationToken,
     ready_signal: &mut Option<oneshot::Sender<Result<()>>>,
 ) -> Result<()> {
@@ -523,12 +528,13 @@ async fn client_session(
     });
 
     // TCP accept loop — listen for local Minecraft connections
-    let listener = TcpListener::bind(proxy::MINECRAFT_LOCAL_ADDR)
+    let listener_addr = format!("127.0.0.1:{local_port}");
+    let listener = TcpListener::bind(&listener_addr)
         .await
         .with_context(|| {
             format!(
                 "WSS relay: не удалось занять порт {}",
-                proxy::MINECRAFT_LOCAL_ADDR
+                listener_addr
             )
         })?;
 

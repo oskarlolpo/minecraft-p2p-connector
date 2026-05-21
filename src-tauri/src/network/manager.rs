@@ -532,8 +532,20 @@ impl NetworkManager {
             .await;
         }
 
+        let self_clone = self.clone();
+        let display_peer_clone = display_peer.clone();
+        let expected_peers_clone = expected_peers.clone();
+
         tokio::spawn(async move {
             let _ = punch_remote(socket, peer_addr, &room_name, &peer_id, cancel).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(20)).await;
+            self_clone.mutate_status(|status| {
+                if let Some(pos) = status.peers.iter().position(|p| p.peer_id == display_peer_clone && !p.connected) {
+                    status.peers.remove(pos);
+                    status.logs.push(format!("Peer {} timed out connecting", display_peer_clone));
+                }
+            }).await;
+            expected_peers_clone.write().await.retain(|_, id| id != &display_peer_clone);
         });
 
         Ok(true)
@@ -728,20 +740,16 @@ impl NetworkManager {
             }
         };
 
-        let local_listener = TcpListener::bind(proxy::MINECRAFT_LOCAL_ADDR)
+        let local_listener = TcpListener::bind("127.0.0.1:0")
             .await
-            .with_context(|| {
-                format!(
-                    "РЅРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєСЂС‹С‚СЊ Р»РѕРєР°Р»СЊРЅС‹Р№ РїСЂРѕРєСЃРё РЅР° {}. РџРѕСЂС‚ СѓР¶Рµ Р·Р°РЅСЏС‚",
-                    proxy::MINECRAFT_LOCAL_ADDR
-                )
-            })?;
+            .with_context(|| "не удалось найти свободный порт для локального прокси")?;
+        let local_port = local_listener.local_addr()?.port();
 
         self.mutate_status(|status| {
             status.state = ConnectionState::Connected;
             status.transport_path = Some("direct-quic".into());
             status.note = Some(
-                "Connection established. Connect in Minecraft to localhost:25565.".into(),
+                format!("Connection established. Connect in Minecraft to localhost:{local_port}.")
             );
             status.peers = vec![PeerInfo {
                 peer_id: peer_id.clone(),
@@ -752,13 +760,13 @@ impl NetworkManager {
             }];
         })
         .await;
-        self.push_log("Р›РѕРєР°Р»СЊРЅС‹Р№ proxy РЅР° 127.0.0.1:25565 РїРѕРґРЅСЏС‚.".into())
+        self.push_log(format!("Локальный proxy на 127.0.0.1:{local_port} поднят."))
             .await;
         let _ = app.emit(
             "tunnel_established",
             TunnelEstablishedEvent {
                 peer_addr: peer_addr.to_string(),
-                minecraft_addr: proxy::MINECRAFT_LOCAL_ADDR.into(),
+                minecraft_addr: proxy::minecraft_local_addr(local_port),
                 transport: "direct-quic".into(),
             },
         );
@@ -1057,7 +1065,7 @@ impl NetworkManager {
             status.state = ConnectionState::Connecting;
             status.transport_path = Some("wss-relay".into());
             status.note = Some(
-                "Direct UDP tunnel failed. Falling back to secure WSS tunnel (РїРѕСЂС‚ 443)."
+                "Используется резервный WSS туннель (порт 443)."
                     .into(),
             );
         })
@@ -1066,7 +1074,7 @@ impl NetworkManager {
         let mut relay_config = self.inner.wss_relay_config.clone();
         relay_config.session_id = session_id.clone();
         
-        let runtime = wss_relay::start_client_runtime(
+        let (runtime, local_port) = wss_relay::start_client_runtime(
             relay_config,
             cancel.clone(),
         )
@@ -1077,8 +1085,7 @@ impl NetworkManager {
             status.state = ConnectionState::Connected;
             status.transport_path = Some("wss-relay".into());
             status.note = Some(
-                "РџРѕР»РЅР°СЏ РјР°СЃРєРёСЂРѕРІРєР°. РЎРѕРµРґРёРЅРµРЅРёРµ СѓСЃС‚Р°РЅРѕРІР»РµРЅРѕ via РЎРµРєСЂРµС‚РЅС‹Р№ РўСѓРЅРЅРµР»СЊ 443. РџРѕРґРєР»СЋС‡Р°Р№С‚РµСЃСЊ Рє localhost:25565."
-                    .into(),
+                format!("Соединение установлено. Подключайтесь к localhost:{local_port}.")
             );
             status.peers = vec![PeerInfo {
                 peer_id: peer_id.clone(),
@@ -1097,7 +1104,7 @@ impl NetworkManager {
             "tunnel_established",
             TunnelEstablishedEvent {
                 peer_addr: peer_addr.to_string(),
-                minecraft_addr: proxy::MINECRAFT_LOCAL_ADDR.into(),
+                minecraft_addr: proxy::minecraft_local_addr(local_port),
                 transport: "wss-relay".into(),
             },
         );
