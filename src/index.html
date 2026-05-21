@@ -113,6 +113,8 @@
                 <span class="status-label">Ably Presence</span>
                 <strong id="connection-state">ОЖИДАНИЕ</strong>
                 <span id="ably-state">connecting</span>
+              </div>
+              <p id="host-lock-note" class="hero-note" data-i18n="hostNoteIdle">Запустите хост, чтобы опубликовать локальный мир или сервер.</p>
             </div>
           </header>
 
@@ -133,6 +135,24 @@
                 <div id="peer-list" class="player-grid"></div>
               </section>
 
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <span class="eyebrow" data-i18n="publicHostsLabel">Список серверов</span>
+                    <h2 id="lobby-count">0 server(s)</h2>
+                  </div>
+                </div>
+                <div class="row-head server-head">
+                  <span data-i18n="serverNameColumn">Сервер</span>
+                  <span data-i18n="serverVersionColumn">Версия</span>
+                  <span data-i18n="serverPlayersColumn">Онлайн</span>
+                  <span data-i18n="serverActionColumn">Действие</span>
+                </div>
+                <div id="server-list" class="server-list"></div>
+              </section>
+            </div>
+
+            <div class="stack-column side-column">
               <section class="panel snapshot-panel">
                 <div class="panel-head">
                   <div>
@@ -165,23 +185,6 @@
                   </div>
                 </div>
               </section>
-
-              <section class="panel">
-                <div class="panel-head">
-                  <div>
-                    <span class="eyebrow" data-i18n="publicHostsLabel">Список серверов</span>
-                    <h2 id="lobby-count">0 server(s)</h2>
-                  </div>
-                </div>
-                <div class="row-head server-head">
-                  <span data-i18n="serverNameColumn">Сервер</span>
-                  <span data-i18n="serverVersionColumn">Версия</span>
-                  <span data-i18n="serverPlayersColumn">Онлайн</span>
-                  <span data-i18n="serverActionColumn">Действие</span>
-                </div>
-                <div id="server-list" class="server-list"></div>
-              </section>
-            </div>
 
               <section class="panel selected-panel">
                 <div class="panel-head">
