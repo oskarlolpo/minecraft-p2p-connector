@@ -2280,6 +2280,21 @@ input, textarea {
   100% { transform: rotate(360deg); }
 }
 
+.theme-select {
+  padding: 10px 32px 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-base);
+  width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="%23888" viewBox="0 0 16 16"><path d="M4.2 6.2l3.8 3.8 3.8-3.8z"/></svg>');
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  box-sizing: border-box;
+}
+
 .host-theme-badge {
   display: inline-block;
   padding: 2px 6px;
