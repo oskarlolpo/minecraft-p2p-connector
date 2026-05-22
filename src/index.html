@@ -118,22 +118,14 @@
             </div>
           </header>
 
-          <div class="content-grid">
-            <div class="stack-column">
-              <section class="panel panel-large">
-                <div class="panel-head">
-                  <div>
-                    <h2 id="host-section-title" data-i18n="activeHostTitle">Активная сессия</h2>
-                  </div>
-                  <button id="stop-button" class="ghost-button danger-button" type="button" data-i18n="stopButton">Остановить</button>
-                </div>
-                <div id="active-host-card" class="active-host-card empty"></div>
-                <div class="row-head players-head">
-                  <span data-i18n="playerColumn">Игрок</span>
-                  <span data-i18n="playerActionColumn">Действие</span>
-                </div>
-                <div id="peer-list" class="player-grid"></div>
-              </section>
+                    <div class="content-grid">
+            <div class="stack-column" style="width: 100%;">
+              <div class="server-list-controls" style="display: flex; gap: 12px; margin-bottom: 16px;">
+                <input type="text" id="server-search-input" placeholder="Поиск серверов..." style="flex: 1; padding: 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-raised); color: var(--text-base); font-size: 14px;" />
+                <button type="button" id="open-filter-modal" class="ghost-button" style="padding: 12px;">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+                </button>
+              </div>
 
               <section class="panel">
                 <div class="panel-head">
@@ -150,9 +142,128 @@
                 </div>
                 <div id="server-list" class="server-list"></div>
               </section>
+              <section class="panel panel-large hidden" id="active-session-panel">
+                <div class="panel-head">
+                  <div>
+                    <h2 id="host-section-title" data-i18n="activeHostTitle">Активная сессия</h2>
+                  </div>
+                  <button id="stop-button" class="ghost-button danger-button" type="button" data-i18n="stopButton">Остановить</button>
+                </div>
+                <div id="active-host-card" class="active-host-card empty"></div>
+                <div class="row-head players-head">
+                  <span data-i18n="playerColumn">Игрок</span>
+                  <span data-i18n="playerActionColumn">Действие</span>
+                </div>
+                <div id="peer-list" class="player-grid"></div>
+              </section>
             </div>
+          </div>
+        </section>
 
-            <div class="stack-column side-column">
+        <section id="page-settings" class="page">
+          <header class="hero-panel settings-hero">
+            <div class="hero-left">
+              <h1 data-i18n="settingsTitle">Настройки</h1>
+            </div>
+            <div class="hero-right settings-top-right">
+              <span class="status-label" data-i18n="settingsVersionLabel">Версия</span>
+              <strong id="settings-version">0.0.0</strong>
+            </div>
+          </header>
+
+          <nav class="settings-tabs" style="display: flex; gap: 16px; margin-bottom: 24px; border-bottom: 1px solid var(--line); padding-bottom: 8px;">
+            <button class="settings-tab active" data-tab="account">Аккаунт</button>
+            <button class="settings-tab" data-tab="interface">Интерфейс</button>
+            <button class="settings-tab" data-tab="network">Сеть</button>
+            <button class="settings-tab" data-tab="diagnostics">Диагностика</button>
+          </nav>
+
+          <div class="settings-layout">
+            <div class="settings-tab-content active" id="tab-account">
+              <section class="panel">
+              <div class="panel-head">
+                <div><h2>Аккаунт</h2></div>
+              </div>
+              <div class="profile-account-grid">
+                <div class="profile-info-row">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                  <div class="profile-info-col">
+                    <span class="profile-info-label">Email</span>
+                    <span id="settings-auth-email" class="profile-info-value">—</span>
+                  </div>
+                </div>
+                <div class="profile-info-row">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                  <div class="profile-info-col">
+                    <span class="profile-info-label">Способ входа</span>
+                    <span id="settings-auth-provider" class="profile-info-value">Email</span>
+                  </div>
+                </div>
+              </div>
+              <div style="margin-top: 16px;">
+                <button id="btn-logout" class="ghost-button danger-ghost-button profile-logout-button" type="button">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                  Выйти из аккаунта
+                </button>
+              </div>
+            </section>
+            </div>
+            <div class="settings-tab-content" id="tab-interface">
+              <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2 data-i18n="themeSectionTitle">Тема</h2>
+                </div>
+              </div>
+              <div class="settings-options">
+                <button class="option-card" type="button" data-theme-value="white">
+                  <span>Light</span>
+                  <small>Clean bright surfaces.</small>
+                </button>
+                <button class="option-card" type="button" data-theme-value="dark">
+                  <span>Graphite</span>
+                  <small>Balanced dark theme.</small>
+                </button>
+                <button class="option-card" type="button" data-theme-value="oled">
+                  <span>Ember</span>
+                  <small>Warm premium dark theme.</small>
+                </button>
+              </div>
+            </section>
+              <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2 data-i18n="accentSectionTitle">Акцентный цвет</h2>
+                </div>
+              </div>
+              <div class="accent-picker">
+                <button class="accent-btn" data-accent="blue" style="--btn-color: var(--accent-blue)" title="Blue"></button>
+                <button class="accent-btn" data-accent="red" style="--btn-color: var(--accent-red)" title="Ruby"></button>
+                <button class="accent-btn" data-accent="yellow" style="--btn-color: var(--accent-yellow)" title="Amber"></button>
+                <button class="accent-btn" data-accent="green" style="--btn-color: var(--accent-green)" title="Emerald"></button>
+                <button class="accent-btn" data-accent="purple" style="--btn-color: var(--accent-purple)" title="Amethyst"></button>
+                <button class="accent-btn" data-accent="orange" style="--btn-color: var(--accent-orange)" title="Flame"></button>
+              </div>
+            </section>
+              <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2 data-i18n="languageSectionTitle">Язык</h2>
+                </div>
+              </div>
+              <div class="settings-options">
+                <button class="option-card" type="button" data-language-value="ru">
+                  <span>Русский</span>
+                  <small>Русский интерфейс.</small>
+                </button>
+                <button class="option-card" type="button" data-language-value="en">
+                  <span>English</span>
+                  <small>English interface.</small>
+                </button>
+              </div>
+            </section>
+            </div>
+            <div class="settings-tab-content" id="tab-network">
               <section class="panel snapshot-panel">
                 <div class="panel-head">
                   <div>
@@ -185,42 +296,46 @@
                   </div>
                 </div>
               </section>
-
-              <section class="panel selected-panel">
-                <div class="panel-head">
-                  <div>
-                    <h2 id="selected-server" data-i18n="noSelection">Сервер не выбран</h2>
-                  </div>
-                </div>
-                <div class="selected-card">
-                  <div class="metric-row">
-                    <span data-i18n="selectedAddressLabel">Java endpoint</span>
-                    <strong id="selected-endpoint">n/a</strong>
-                  </div>
-                  <div class="metric-row">
-                    <span data-i18n="selectedBedrockAddressLabel">Bedrock endpoint</span>
-                    <strong id="selected-bedrock-endpoint">n/a</strong>
-                  </div>
-                  <p id="selected-meta" class="panel-copy" data-i18n="selectedMetaEmpty">Выберите сервер из списка.</p>
-                  <div class="hero-actions compact">
-                    <button id="copy-selected-endpoint" class="ghost-button" type="button" data-i18n="copyIpButton">Скопировать Java IP</button>
-                    <button id="copy-selected-bedrock-endpoint" class="ghost-button" type="button" data-i18n="copyBedrockIpButton">
-                      Скопировать Bedrock IP
-                    </button>
-                    <button id="connect-selected" class="primary-button" type="button" data-i18n="connectButton">Подключиться</button>
-                  </div>
-                </div>
-              </section>
-
               <section class="panel">
-                <div class="panel-head">
-                  <div>
-                    <h2 id="status-note" data-i18n="hintWaiting">Ожидание действия...</h2>
-                  </div>
+              <div class="panel-head">
+                <div>
+                  <h2 data-i18n="settingsIgnoredPortsTitle">Игнорируемые порты</h2>
                 </div>
-                <div id="minecraft-target-hint" class="minecraft-hint" data-i18n="hintWaiting">Ожидание действия...</div>
-              </section>
-
+                <div class="hero-actions compact">
+                  <button id="clear-ignored-ports" class="ghost-button danger-button" type="button" data-i18n="clearIgnoredButton">Очистить список</button>
+                </div>
+              </div>
+              <p class="panel-copy" data-i18n="settingsIgnoredNote">Эти порты будут пропускаться при автопоиске.</p>
+              <div id="ignored-ports-list" class="tag-list">
+                <div class="empty-state">Список пуст</div>
+              </div>
+            </section>
+            </div>
+            <div class="settings-tab-content" id="tab-diagnostics">
+              <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2 data-i18n="updatesSectionTitle">Обновления</h2>
+                </div>
+                <div class="hero-actions compact">
+                  <button id="check-updates" class="ghost-button" type="button" data-i18n="updatesCheckButton">Проверить обновления</button>
+                  <button id="install-update" class="primary-button hidden" type="button" data-i18n="updatesInstallButton">Установить</button>
+                </div>
+              </div>
+              <div id="update-status" class="panel-copy">—</div>
+            </section>
+              <section class="panel log-panel">
+              <div class="panel-head">
+                <div>
+                  <h2 data-i18n="settingsLogsTitle">Логи приложения</h2>
+                </div>
+                <div class="hero-actions compact">
+                  <button id="copy-logs" class="ghost-button" type="button" data-i18n="copyLogButton">Скопировать лог</button>
+                  <button id="copy-diagnostics" class="ghost-button" type="button" data-i18n="copyDiagnosticsButton">Скопировать JSON лог</button>
+                </div>
+              </div>
+              <div id="logs" class="log-list"></div>
+            </section>
               <section class="panel">
                 <div class="panel-head">
                   <div>
@@ -239,145 +354,6 @@
                 </div>
               </section>
             </div>
-          </div>
-        </section>
-
-        <section id="page-settings" class="page">
-          <header class="hero-panel settings-hero">
-            <div class="hero-left">
-              <h1 data-i18n="settingsTitle">Настройки</h1>
-            </div>
-            <div class="hero-right settings-top-right">
-              <span class="status-label" data-i18n="settingsVersionLabel">Версия</span>
-              <strong id="settings-version">0.0.0</strong>
-            </div>
-          </header>
-
-          <div class="settings-layout">
-            <section class="panel">
-              <div class="panel-head">
-                <div>
-                  <h2 data-i18n="themeSectionTitle">Тема</h2>
-                </div>
-              </div>
-              <div class="settings-options">
-                <button class="option-card" type="button" data-theme-value="white">
-                  <span>Light</span>
-                  <small>Clean bright surfaces.</small>
-                </button>
-                <button class="option-card" type="button" data-theme-value="dark">
-                  <span>Graphite</span>
-                  <small>Balanced dark theme.</small>
-                </button>
-                <button class="option-card" type="button" data-theme-value="oled">
-                  <span>Ember</span>
-                  <small>Warm premium dark theme.</small>
-                </button>
-              </div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-head">
-                <div>
-                  <h2 data-i18n="accentSectionTitle">Акцентный цвет</h2>
-                </div>
-              </div>
-              <div class="accent-picker">
-                <button class="accent-btn" data-accent="blue" style="--btn-color: var(--accent-blue)" title="Blue"></button>
-                <button class="accent-btn" data-accent="red" style="--btn-color: var(--accent-red)" title="Ruby"></button>
-                <button class="accent-btn" data-accent="yellow" style="--btn-color: var(--accent-yellow)" title="Amber"></button>
-                <button class="accent-btn" data-accent="green" style="--btn-color: var(--accent-green)" title="Emerald"></button>
-                <button class="accent-btn" data-accent="purple" style="--btn-color: var(--accent-purple)" title="Amethyst"></button>
-                <button class="accent-btn" data-accent="orange" style="--btn-color: var(--accent-orange)" title="Flame"></button>
-              </div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-head">
-                <div>
-                  <h2 data-i18n="languageSectionTitle">Язык</h2>
-                </div>
-              </div>
-              <div class="settings-options">
-                <button class="option-card" type="button" data-language-value="ru">
-                  <span>Русский</span>
-                  <small>Русский интерфейс.</small>
-                </button>
-                <button class="option-card" type="button" data-language-value="en">
-                  <span>English</span>
-                  <small>English interface.</small>
-                </button>
-              </div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-head">
-                <div>
-                  <h2 data-i18n="updatesSectionTitle">Обновления</h2>
-                </div>
-                <div class="hero-actions compact">
-                  <button id="check-updates" class="ghost-button" type="button" data-i18n="updatesCheckButton">Проверить обновления</button>
-                  <button id="install-update" class="primary-button hidden" type="button" data-i18n="updatesInstallButton">Установить</button>
-                </div>
-              </div>
-              <div id="update-status" class="panel-copy">—</div>
-            </section>
-
-            <section class="panel log-panel">
-              <div class="panel-head">
-                <div>
-                  <h2 data-i18n="settingsLogsTitle">Логи приложения</h2>
-                </div>
-                <div class="hero-actions compact">
-                  <button id="copy-logs" class="ghost-button" type="button" data-i18n="copyLogButton">Скопировать лог</button>
-                  <button id="copy-diagnostics" class="ghost-button" type="button" data-i18n="copyDiagnosticsButton">Скопировать JSON лог</button>
-                </div>
-              </div>
-              <div id="logs" class="log-list"></div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-head">
-                <div>
-                  <h2 data-i18n="settingsIgnoredPortsTitle">Игнорируемые порты</h2>
-                </div>
-                <div class="hero-actions compact">
-                  <button id="clear-ignored-ports" class="ghost-button danger-button" type="button" data-i18n="clearIgnoredButton">Очистить список</button>
-                </div>
-              </div>
-              <p class="panel-copy" data-i18n="settingsIgnoredNote">Эти порты будут пропускаться при автопоиске.</p>
-              <div id="ignored-ports-list" class="tag-list">
-                <div class="empty-state">Список пуст</div>
-              </div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-head">
-                <div><h2>Аккаунт</h2></div>
-              </div>
-              <div class="profile-account-grid">
-                <div class="profile-info-row">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-                  <div class="profile-info-col">
-                    <span class="profile-info-label">Email</span>
-                    <span id="settings-auth-email" class="profile-info-value">—</span>
-                  </div>
-                </div>
-                <div class="profile-info-row">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                  <div class="profile-info-col">
-                    <span class="profile-info-label">Способ входа</span>
-                    <span id="settings-auth-provider" class="profile-info-value">Email</span>
-                  </div>
-                </div>
-              </div>
-              <div style="margin-top: 16px;">
-                <button id="btn-logout" class="ghost-button danger-ghost-button profile-logout-button" type="button">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-                  Выйти из аккаунта
-                </button>
-              </div>
-            </section>
           </div>
         </section>
 
@@ -476,6 +452,18 @@
           <label class="field">
             <span data-i18n="modalServerNameLabel">Название сервера</span>
             <input id="room-name" type="text" maxlength="32" placeholder="Northern Lights SMP" data-i18n-placeholder="modalServerNamePlaceholder" />
+          </label>
+
+          <label class="field">
+            <span data-i18n="modalThemeLabel">Тематика сервера</span>
+            <select id="room-theme" style="padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface); color: var(--text-base); width: 100%;">
+              <option value="vanilla" data-i18n="themeVanilla">Ванилла</option>
+              <option value="survival" data-i18n="themeSurvival">Выживание</option>
+              <option value="creative" data-i18n="themeCreative">Творческий</option>
+              <option value="minigames" data-i18n="themeMinigames">Мини-игры</option>
+              <option value="anarchy" data-i18n="themeAnarchy">Анархия</option>
+              <option value="modded" data-i18n="themeModded">С модами</option>
+            </select>
           </label>
 
           <label class="field">
@@ -606,7 +594,37 @@
       </div>
     </div>
 
-    
+    <div id="filter-modal" class="modal-shell hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-filter-modal="true"></div>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="filter-modal-title">
+        <div class="panel-head">
+          <div>
+            <span class="eyebrow" data-i18n="filterModalLabel">ФИЛЬТРЫ ЛОББИ</span>
+            <h2 id="filter-modal-title" data-i18n="filterModalTitle">Настроить фильтры</h2>
+          </div>
+          <button id="close-filter-modal" class="icon-button" type="button" aria-label="Закрыть">×</button>
+        </div>
+
+        <div class="modal-grid">
+          <label class="field">
+            <span data-i18n="filterThemeLabel">Тематика</span>
+            <select id="filter-theme" style="padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface); color: var(--text-base); width: 100%;">
+              <option value="all" data-i18n="filterAll">Все темы</option>
+              <option value="vanilla" data-i18n="themeVanilla">Ванилла</option>
+              <option value="survival" data-i18n="themeSurvival">Выживание</option>
+              <option value="creative" data-i18n="themeCreative">Творческий</option>
+              <option value="minigames" data-i18n="themeMinigames">Мини-игры</option>
+              <option value="anarchy" data-i18n="themeAnarchy">Анархия</option>
+              <option value="modded" data-i18n="themeModded">С модами</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="modal-actions">
+          <button id="apply-filters-button" class="primary-button" type="button" data-i18n="filterApplyButton">Применить фильтры</button>
+        </div>
+      </div>
+    </div>
 
     
 

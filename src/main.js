@@ -1356,7 +1356,25 @@ function renderServers() {
     return;
   }
 
-  serverListEl.innerHTML = state.servers
+  // FILTER INJECTED
+    const searchInput = document.getElementById('server-search-input');
+    const filterTheme = document.getElementById('filter-theme');
+    const searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
+    const themeFilter = filterTheme ? filterTheme.value : 'all';
+    
+    let filteredServers = state.servers.filter(server => {
+      const nameMatch = server.name && server.name.toLowerCase().includes(searchTerm);
+      const themeMatch = themeFilter === 'all' || server.theme === themeFilter;
+      return nameMatch && themeMatch;
+    });
+
+    lobbyCountEl.textContent = t("lobbyCount", { count: filteredServers.length });
+    if (!filteredServers.length) {
+      serverListEl.innerHTML = `<div class="empty-state">${escapeHtml(t("noServers"))}</div>`;
+      return;
+    }
+
+    serverListEl.innerHTML = filteredServers
     .map((server) => {
       const isSelected = state.selectedServerId === server.clientId;
       const isLocal = server.clientId === localClientId;
@@ -3170,3 +3188,62 @@ async function initAuth() {
 
 // Initialize Auth
 initAuth();
+
+
+// Settings Tabs Logic
+document.addEventListener("DOMContentLoaded", () => {
+  const settingsTabs = document.querySelectorAll('.settings-tab');
+  const settingsTabContents = document.querySelectorAll('.settings-tab-content');
+
+  settingsTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      settingsTabs.forEach(t => t.classList.remove('active'));
+      settingsTabContents.forEach(c => c.classList.remove('active'));
+      tab.classList.add('active');
+      const targetId = 'tab-' + tab.dataset.tab;
+      const targetContent = document.getElementById(targetId);
+      if (targetContent) {
+        targetContent.classList.add('active');
+      }
+    });
+  });
+});
+
+
+// Filter Modal Logic
+document.addEventListener("DOMContentLoaded", () => {
+  const filterModal = document.getElementById('filter-modal');
+  const openFilterBtn = document.getElementById('open-filter-modal');
+  const closeFilterBtn = document.getElementById('close-filter-modal');
+  const applyFiltersBtn = document.getElementById('apply-filters-button');
+  
+  if (openFilterBtn) {
+    openFilterBtn.addEventListener('click', () => {
+      filterModal.classList.remove('hidden');
+    });
+  }
+  
+  if (closeFilterBtn) {
+    closeFilterBtn.addEventListener('click', () => {
+      filterModal.classList.add('hidden');
+    });
+  }
+  
+  if (applyFiltersBtn) {
+    applyFiltersBtn.addEventListener('click', () => {
+      filterModal.classList.add('hidden');
+      if (typeof renderServers === 'function') {
+         // trigger render
+         renderServers();
+      }
+    });
+  }
+
+  // Also search input
+  const searchInput = document.getElementById('server-search-input');
+  if (searchInput) {
+    searchInput.addEventListener('input', () => {
+      if (typeof renderServers === 'function') renderServers();
+    });
+  }
+});
