@@ -232,7 +232,7 @@ impl NetworkManager {
         let _guard = self.inner.control.lock().await;
         self.reset_session().await;
 
-        let (prepared, udp_bind_addr, public_udp_addr) = self
+        let (prepared, udp_bind_addr, public_udp_addr_opt) = self
             .prepare_client_control(peer_addr, peer_id.clone())
             .await?;
         let cancel = CancellationToken::new();
@@ -241,7 +241,7 @@ impl NetworkManager {
             mode: SessionMode::Client,
             state: ConnectionState::WaitingForPeer,
             udp_bind_addr: Some(udp_bind_addr.to_string()),
-            public_udp_addr: Some(public_udp_addr.to_string()),
+            public_udp_addr: public_udp_addr_opt.map(|a| a.to_string()),
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             note: Some(
                 "Client UDP endpoint prepared. Waiting for relay ack from host.".into(),
@@ -255,7 +255,7 @@ impl NetworkManager {
             }],
             logs: vec![
                 format!("Client bind: {udp_bind_addr}"),
-                format!("Client public UDP: {public_udp_addr}"),
+                format!("Client public UDP: {}", public_udp_addr_opt.map(|a| a.to_string()).unwrap_or_else(|| "Unknown".into())),
                 format!("Client target: {peer_addr}"),
             ],
             ..Default::default()
@@ -406,7 +406,15 @@ impl NetworkManager {
         };
 
         let (udp_socket, punch_socket, udp_bind_addr) = Self::bind_shared_udp_socket()?;
-        let public_udp_addr = discover_public_addr(punch_socket.clone(), &self.inner.stun).await?;
+        let public_udp_addr_res = discover_public_addr(punch_socket.clone(), &self.inner.stun).await;
+        let public_udp_addr_str = match &public_udp_addr_res {
+            Ok(addr) => Some(addr.to_string()),
+            Err(e) => {
+                self.push_log(format!("STUN discovery failed, proceeding in Relay mode: {e:#}")).await;
+                None
+            }
+        };
+
         let (server_config, _) = build_server_config()?;
         let endpoint = Endpoint::new(
             EndpointConfig::default(),
@@ -421,7 +429,7 @@ impl NetworkManager {
             state: ConnectionState::Hosting,
             room_code: Some(room_name.clone()),
             udp_bind_addr: Some(udp_bind_addr.to_string()),
-            public_udp_addr: Some(public_udp_addr.to_string()),
+            public_udp_addr: public_udp_addr_str.clone(),
             local_game_port: Some(local_port),
             minecraft_version: minecraft_version.clone(),
             password_protected: has_password,
@@ -433,7 +441,7 @@ impl NetworkManager {
                     .unwrap_or_else(|| "Unknown".into())
             )),
             logs: vec![
-                format!("Public UDP address: {public_udp_addr}"),
+                format!("Public UDP address: {}", public_udp_addr_str.as_deref().unwrap_or("Unknown")),
                 format!("Local bind: {udp_bind_addr}"),
                 format!("Host forwards to {}", proxy::minecraft_local_addr(local_port)),
             ],
@@ -470,7 +478,7 @@ impl NetworkManager {
             }),
         });
 
-        Ok(public_udp_addr.to_string())
+        Ok(public_udp_addr_str.unwrap_or_default())
     }
 
     async fn punch_from_host(
@@ -558,7 +566,7 @@ impl NetworkManager {
         peer_id: String,
         relay_session_id: Option<String>,
     ) -> Result<()> {
-        let (prepared, udp_bind_addr, public_udp_addr) = self
+        let (prepared, udp_bind_addr, public_udp_addr_opt) = self
             .prepare_client_control(peer_addr, peer_id.clone())
             .await?;
         let cancel = CancellationToken::new();
@@ -567,7 +575,7 @@ impl NetworkManager {
             mode: SessionMode::Client,
             state: ConnectionState::WaitingForPeer,
             udp_bind_addr: Some(udp_bind_addr.to_string()),
-            public_udp_addr: Some(public_udp_addr.to_string()),
+            public_udp_addr: public_udp_addr_opt.map(|a| a.to_string()),
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             note: Some("Client ready. Sending handshake and waiting for host.".into()),
             peers: vec![PeerInfo {
@@ -579,7 +587,7 @@ impl NetworkManager {
             }],
             logs: vec![
                 format!("Client bind: {udp_bind_addr}"),
-                format!("Client public UDP: {public_udp_addr}"),
+                format!("Client public UDP: {}", public_udp_addr_opt.map(|a| a.to_string()).unwrap_or_else(|| "Unknown".into())),
                 format!("Client target: {peer_addr}"),
             ],
             ..Default::default()
@@ -609,9 +617,17 @@ impl NetworkManager {
         &self,
         peer_addr: SocketAddr,
         peer_id: String,
-    ) -> Result<(PreparedClientControl, SocketAddr, SocketAddr)> {
+    ) -> Result<(PreparedClientControl, SocketAddr, Option<SocketAddr>)> {
         let (udp_socket, punch_socket, udp_bind_addr) = Self::bind_shared_udp_socket()?;
-        let public_udp_addr = discover_public_addr(punch_socket.clone(), &self.inner.stun).await?;
+        let public_udp_addr_res = discover_public_addr(punch_socket.clone(), &self.inner.stun).await;
+        
+        let public_udp_addr = match public_udp_addr_res {
+            Ok(addr) => Some(addr),
+            Err(e) => {
+                self.push_log(format!("STUN discovery failed, proceeding in Relay mode: {e:#}")).await;
+                None
+            }
+        };
 
         let mut endpoint = Endpoint::new(
             EndpointConfig::default(),
