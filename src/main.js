@@ -753,7 +753,7 @@ function openModal() {
   if (!canOpenHostModal()) return;
   modalEl.classList.remove("hidden");
   modalEl.setAttribute("aria-hidden", "false");
-  void autofillRoomNameFromLocalServer();
+  autoDetectLocalGamePort().then(() => autofillRoomNameFromLocalServer());
   setTimeout(() => roomNameEl.focus(), 30);
 }
 
@@ -1950,16 +1950,23 @@ async function probeEmbeddedTestServer() {
 
 async function startHosting() {
   if (!canOpenHostModal()) return;
+  const originalHostText = hostButtonEl.innerHTML;
+  hostButtonEl.disabled = true;
+  hostButtonEl.innerHTML = `<span class="spinner"></span> <span>Запуск...</span>`;
+  hostButtonEl.classList.add('loading-opacity');
+
   await detectMinecraftNickname();
   await autofillRoomNameFromLocalServer();
   const roomName = roomNameEl.value.trim();
   if (!roomName) {
     roomNameEl.focus();
+    hostButtonEl.disabled = false;
+    hostButtonEl.innerHTML = originalHostText;
+    hostButtonEl.classList.remove('loading-opacity');
     return;
   }
 
   if (externalHostModeEl.checked) {
-    hostButtonEl.disabled = true;
     try {
       await addExternalServerFromModal(roomName);
       closeModal();
@@ -1967,6 +1974,8 @@ async function startHosting() {
       addLog(t("externalAddFailed", { error: String(error) }));
     } finally {
       hostButtonEl.disabled = false;
+      hostButtonEl.innerHTML = originalHostText;
+      hostButtonEl.classList.remove('loading-opacity');
     }
     return;
   }
@@ -1975,7 +1984,6 @@ async function startHosting() {
   const password = requirePasswordEl.checked ? roomPasswordEl.value.trim() || null : null;
   const enableGeyser = Boolean(enableGeyserEl.checked);
   const geyserPort = Number(geyserPortEl.value || 19132);
-  hostButtonEl.disabled = true;
   state.tunnelReady = false;
   setMinecraftHint(t("hintWaiting"), false);
 
@@ -2035,6 +2043,11 @@ async function startHosting() {
     addLog(t("hostStartFailed", { error: String(error) }));
   } finally {
     syncButtons();
+    hostButtonEl.disabled = false;
+    if (hostButtonEl.classList.contains('loading-opacity')) {
+        hostButtonEl.innerHTML = originalHostText;
+        hostButtonEl.classList.remove('loading-opacity');
+    }
   }
 }
 
@@ -2513,6 +2526,17 @@ setPage("home");
 renderIgnoredPorts();
 await loadAppInfo();
 await detectMinecraftNickname();
+await initAuth();
+
+document.querySelectorAll(".settings-tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".settings-tab").forEach(t => t.classList.remove("active"));
+    document.querySelectorAll(".settings-tab-content").forEach(c => c.classList.remove("active"));
+    tab.classList.add("active");
+    const targetEl = document.getElementById(`tab-${tab.dataset.tab}`);
+    if (targetEl) targetEl.classList.add("active");
+  });
+});
 
 setInterval(() => {
   void pollStatus();
