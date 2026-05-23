@@ -3271,3 +3271,40 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 });
+
+
+document.querySelectorAll(".custom-select-wrapper").forEach(wrapper => {
+  const select = wrapper.querySelector("select");
+  const customSelect = wrapper.querySelector(".custom-select");
+  const trigger = wrapper.querySelector(".custom-select-trigger");
+  const valueContainer = wrapper.querySelector(".custom-select-value");
+  const options = wrapper.querySelectorAll(".custom-select-option");
+
+  // set initial
+  options.forEach(opt => {
+    if (opt.dataset.value === select.value) {
+      opt.classList.add("selected");
+      valueContainer.innerHTML = opt.innerHTML;
+    }
+  });
+
+  trigger.addEventListener("click", () => {
+    customSelect.classList.toggle("open");
+  });
+
+  customSelect.addEventListener("blur", () => {
+    customSelect.classList.remove("open");
+  });
+
+  options.forEach(opt => {
+    opt.addEventListener("click", (e) => {
+      e.stopPropagation();
+      options.forEach(o => o.classList.remove("selected"));
+      opt.classList.add("selected");
+      valueContainer.innerHTML = opt.innerHTML;
+      select.value = opt.dataset.value;
+      select.dispatchEvent(new Event("change"));
+      customSelect.classList.remove("open");
+    });
+  });
+});
