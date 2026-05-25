@@ -35,11 +35,11 @@
         <form id="auth-form" style="display: flex; flex-direction: column; gap: 16px;">
           <label class="field">
             <span>Email</span>
-            <input type="email" id="auth-email" placeholder="player@example.com" required />
+            <input type="email" id="auth-email" placeholder="player@example.com" autocomplete="username" required />
           </label>
           <label class="field">
             <span>Пароль</span>
-            <input type="password" id="auth-password" placeholder="••••••••" required minlength="6" />
+            <input type="password" id="auth-password" placeholder="••••••••" required minlength="6" autocomplete="current-password" />
           </label>
           
           <button type="submit" id="btn-auth-submit" class="primary-button" style="width: 100%; margin-top: 8px;">Зарегистрироваться</button>
@@ -78,7 +78,7 @@
         <div class="sidebar-brand-block">
           <button id="profile-menu-trigger" class="brand-mark avatar-trigger" type="button" aria-label="Открыть профиль">
             <img id="brand-avatar-image" class="hidden" alt="" />
-            <span id="brand-avatar-fallback">P</span>
+            <span id="brand-avatar-fallback"><svg width="24" height="24" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></g></svg></span>
           </button>
           <div class="brand-copy">
             <span class="brand-label">Minecraft P2P Connector</span>
@@ -88,11 +88,11 @@
 
         <nav class="sidebar-nav">
           <button id="nav-home" class="nav-button nav-button-active" type="button" aria-label="Главная">
-            <img src="./assets/icons/home.svg" alt="" />
+            <svg width="24" height="24" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></g></svg>
             <span data-i18n="navHome">Главная</span>
           </button>
           <button id="nav-settings" class="nav-button" type="button" aria-label="Настройки">
-            <img src="./assets/icons/settings.svg" alt="" />
+            <svg width="24" height="24" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0a2.34 2.34 0 0 0 3.319 1.915a2.34 2.34 0 0 1 2.33 4.033a2.34 2.34 0 0 0 0 3.831a2.34 2.34 0 0 1-2.33 4.033a2.34 2.34 0 0 0-3.319 1.915a2.34 2.34 0 0 1-4.659 0a2.34 2.34 0 0 0-3.32-1.915a2.34 2.34 0 0 1-2.33-4.033a2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></g></svg>
             <span data-i18n="navSettings">Настройки</span>
           </button>
         </nav>
@@ -120,28 +120,6 @@
 
                     <div class="content-grid">
             <div class="stack-column" style="width: 100%;">
-              <div class="server-list-controls" style="display: flex; gap: 12px; margin-bottom: 16px;">
-                <input type="text" id="server-search-input" placeholder="Поиск серверов..." style="flex: 1; padding: 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-raised); color: var(--text-base); font-size: 14px;" />
-                <button type="button" id="open-filter-modal" class="ghost-button" style="padding: 12px;">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
-                </button>
-              </div>
-
-              <section class="panel">
-                <div class="panel-head">
-                  <div>
-                    <span class="eyebrow" data-i18n="publicHostsLabel">Список серверов</span>
-                    <h2 id="lobby-count">0 server(s)</h2>
-                  </div>
-                </div>
-                <div class="row-head server-head">
-                  <span data-i18n="serverNameColumn">Сервер</span>
-                  <span data-i18n="serverVersionColumn">Версия</span>
-                  <span data-i18n="serverPlayersColumn">Онлайн</span>
-                  <span data-i18n="serverActionColumn">Действие</span>
-                </div>
-                <div id="server-list" class="server-list"></div>
-              </section>
               <section class="panel panel-large hidden" id="active-session-panel">
                 <div class="panel-head">
                   <div>
@@ -155,6 +133,30 @@
                   <span data-i18n="playerActionColumn">Действие</span>
                 </div>
                 <div id="peer-list" class="player-grid"></div>
+              </section>
+
+              <div class="server-list-controls" style="display: flex; gap: 12px; margin-bottom: 16px; align-items: center;">
+                <input type="text" id="server-search-input" placeholder="Поиск серверов..." data-i18n-placeholder="searchPlaceholder" style="flex: 1; padding: 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-raised); color: var(--text-base); font-size: 14px;" />
+                
+                <button type="button" id="open-filter-modal" class="ghost-button" style="padding: 12px;" aria-label="Filters" data-i18n-title="filterButtonAria" title="Настроить фильтры">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+                </button>
+              </div>
+
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <span class="eyebrow" data-i18n="publicHostsLabel">Список серверов</span>
+                    <h2 id="lobby-count">0 сервер(ов)</h2>
+                  </div>
+                </div>
+                <div class="row-head server-head">
+                  <span data-i18n="serverNameColumn">Сервер</span>
+                  <span data-i18n="serverVersionColumn">Версия</span>
+                  <span data-i18n="serverPlayersColumn">Онлайн</span>
+                  <span data-i18n="serverActionColumn">Действие</span>
+                </div>
+                <div id="server-list" class="server-list"></div>
               </section>
             </div>
           </div>
@@ -171,7 +173,7 @@
             </div>
           </header>
 
-          <nav class="settings-tabs" style="display: flex; gap: 16px; margin-bottom: 24px; border-bottom: 1px solid var(--line); padding-bottom: 8px;">
+          <nav class="settings-tabs">
             <button class="settings-tab active" data-tab="account">Аккаунт</button>
             <button class="settings-tab" data-tab="interface">Интерфейс</button>
             <button class="settings-tab" data-tab="network">Сеть</button>
@@ -454,51 +456,61 @@
             <input id="room-name" type="text" maxlength="32" placeholder="Northern Lights SMP" data-i18n-placeholder="modalServerNamePlaceholder" />
           </label>
 
-          <label class="field">
+          <div class="field">
             <span data-i18n="modalThemeLabel">Тематика сервера</span>
-            <select id="room-theme" class="hidden">
-              <option value="vanilla" data-i18n="themeVanilla">Ванилла</option>
-              <option value="survival" data-i18n="themeSurvival">Выживание</option>
-              <option value="creative" data-i18n="themeCreative">Творческий</option>
-              <option value="minigames" data-i18n="themeMinigames">Мини-игры</option>
-              <option value="anarchy" data-i18n="themeAnarchy">Анархия</option>
-              <option value="modded" data-i18n="themeModded">С модами</option>
-            </select>
-            <div class="custom-select-wrapper" data-target="room-theme">
-              <div class="custom-select" tabindex="0">
-                <div class="custom-select-trigger">
-                  <span class="custom-select-value"></span>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                </div>
-                <div class="custom-select-options">
-                  <div class="custom-select-option" data-value="vanilla">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/></svg>
-                    <span data-i18n="themeVanilla">Ванилла</span>
-                  </div>
-                  <div class="custom-select-option" data-value="survival">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
-                    <span data-i18n="themeSurvival">Выживание</span>
-                  </div>
-                  <div class="custom-select-option" data-value="creative">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
-                    <span data-i18n="themeCreative">Творческий</span>
-                  </div>
-                  <div class="custom-select-option" data-value="minigames">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h4"/><path d="M8 10v4"/><circle cx="15" cy="13" r="1"/><circle cx="18" cy="11" r="1"/></svg>
-                    <span data-i18n="themeMinigames">Мини-игры</span>
-                  </div>
-                  <div class="custom-select-option" data-value="anarchy">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M8 20v2h8v-2"/><path d="m12.5 17-.5-1-.5 1h1z"/><path d="M16 20a2 2 0 0 0 1.56-3.25 8 8 0 1 0-11.12 0A2 2 0 0 0 8 20"/></svg>
-                    <span data-i18n="themeAnarchy">Анархия</span>
-                  </div>
-                  <div class="custom-select-option" data-value="modded">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                    <span data-i18n="themeModded">С модами</span>
-                  </div>
-                </div>
-              </div>
+            <input type="hidden" id="room-theme" value="survival">
+            <div class="theme-chip-grid" id="host-theme-chips">
+              <button type="button" class="theme-chip active" data-theme-chip="survival">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+                <span data-i18n="themeSurvival">Выживание</span>
+              </button>
+              <button type="button" class="theme-chip" data-theme-chip="vanilla">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/></svg>
+                <span data-i18n="themeVanilla">Ванилла</span>
+              </button>
+              <button type="button" class="theme-chip" data-theme-chip="creative">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+                <span data-i18n="themeCreative">Творческий</span>
+              </button>
+              <button type="button" class="theme-chip" data-theme-chip="minigames">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h4"/><path d="M8 10v4"/></svg>
+                <span data-i18n="themeMinigames">Мини-игры</span>
+              </button>
+              <button type="button" class="theme-chip" data-theme-chip="anarchy">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M16 20a2 2 0 0 0 1.56-3.25 8 8 0 1 0-11.12 0A2 2 0 0 0 8 20"/></svg>
+                <span data-i18n="themeAnarchy">Анархия</span>
+              </button>
+              <button type="button" class="theme-chip" data-theme-chip="modded">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                <span data-i18n="themeModded">С модами</span>
+              </button>
+              <button type="button" class="theme-chip" data-theme-chip="pvp">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m14.5 17.5-5-5 2-7L4 2l3.5 7.5-2 2 5 5z"/></svg>
+                <span data-i18n="themePvp">PvP</span>
+              </button>
+              <button type="button" class="theme-chip" data-theme-chip="rpg">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 5 4 4"/><path d="m2 22 5.5-1.5L21 7a2.12 2.12 0 0 0-3-3L4.5 17.5Z"/></svg>
+                <span data-i18n="themeRpg">РПГ</span>
+              </button>
+              <button type="button" class="theme-chip" data-theme-chip="war">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>
+                <span data-i18n="themeWar">Война</span>
+              </button>
+              <button type="button" class="theme-chip" data-theme-chip="horror">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s-8-4.5-8-11.8A8 8 0 0 1 12 2a8 8 0 0 1 8 8.2c0 7.3-8 11.8-8 11.8z"/><path d="m9 12 2 2 4-4"/></svg>
+                <span data-i18n="themeHorror">Хоррор</span>
+              </button>
+              <button type="button" class="theme-chip" data-theme-chip="shop">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M15 22v-4a3 3 0 0 0-3-3 3 3 0 0 0-3 3v4"/><path d="M2 7h20"/><path d="M22 7v3a2 2 0 0 1-2 2a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 16 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 12 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 8 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 4 12a2 2 0 0 1-2-2V7"/></svg>
+                <span data-i18n="themeShop">Магазин</span>
+              </button>
+              <button type="button" class="theme-chip" data-theme-chip="other">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+                <span data-i18n="themeOther">Другое</span>
+              </button>
             </div>
-          </label>
+          </div>
+
 
           <label class="field">
             <span class="field-inline">
@@ -516,10 +528,10 @@
             <span data-i18n="modalRequirePassword">Требовать пароль</span>
           </label>
 
-          <label id="password-field-group" class="field hidden">
+          <form id="password-field-group" class="field hidden" onsubmit="event.preventDefault()">
             <span data-i18n="modalPasswordLabel">Пароль комнаты</span>
             <input id="room-password" type="password" autocomplete="new-password" maxlength="64" placeholder="Введите пароль" data-i18n-placeholder="modalPasswordPlaceholder" />
-          </label>
+          </form>
 
           <label class="checkbox-row">
             <input id="enable-geyser" type="checkbox" />
@@ -630,70 +642,76 @@
 
     <div id="filter-modal" class="modal-shell hidden" aria-hidden="true">
       <div class="modal-backdrop" data-close-filter-modal="true"></div>
-      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="filter-modal-title">
+      <div class="modal-card filter-modal-card" role="dialog" aria-modal="true">
         <div class="panel-head">
           <div>
-            <span class="eyebrow" data-i18n="filterModalLabel">ФИЛЬТРЫ ЛОББИ</span>
-            <h2 id="filter-modal-title" data-i18n="filterModalTitle">Настроить фильтры</h2>
+            <span class="eyebrow" data-i18n="filterModalEyebrow">ФИЛЬТРЫ</span>
+            <h2 data-i18n="filterModalTitle">Настроить фильтры</h2>
           </div>
           <button id="close-filter-modal" class="icon-button" type="button" aria-label="Закрыть">×</button>
         </div>
 
-        <div class="modal-grid">
-          <label class="field">
-            <span data-i18n="filterThemeLabel">Тематика</span>
-            <select id="filter-theme" class="hidden">
-              <option value="all" data-i18n="filterAll">Все темы</option>
-              <option value="vanilla" data-i18n="themeVanilla">Ванилла</option>
+        <div class="filter-body">
+          <!-- Тематика -->
+          <div class="filter-section">
+            <div class="filter-section-head">
+              <span data-i18n="filterSectionTheme">Тематика</span>
+              <button class="filter-clear-btn" data-clear="theme" data-i18n="filterClear">Сбросить</button>
+            </div>
+            <select id="filter-theme" class="visually-hidden">
+              <option value="all" data-i18n="themeAll">Все</option>
               <option value="survival" data-i18n="themeSurvival">Выживание</option>
+              <option value="vanilla" data-i18n="themeVanilla">Ванилла</option>
               <option value="creative" data-i18n="themeCreative">Творческий</option>
               <option value="minigames" data-i18n="themeMinigames">Мини-игры</option>
               <option value="anarchy" data-i18n="themeAnarchy">Анархия</option>
               <option value="modded" data-i18n="themeModded">С модами</option>
+              <option value="pvp" data-i18n="themePvp">PvP</option>
+              <option value="rpg" data-i18n="themeRpg">РПГ</option>
+              <option value="war" data-i18n="themeWar">Война</option>
+              <option value="horror" data-i18n="themeHorror">Хоррор</option>
+              <option value="shop" data-i18n="themeShop">Магазин</option>
+              <option value="other" data-i18n="themeOther">Другое</option>
             </select>
-            <div class="custom-select-wrapper" data-target="filter-theme">
-              <div class="custom-select" tabindex="0">
-                <div class="custom-select-trigger">
-                  <span class="custom-select-value"></span>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                </div>
-                <div class="custom-select-options">
-                  <div class="custom-select-option" data-value="all">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
-                    <span data-i18n="filterAll">Все темы</span>
-                  </div>
-                  <div class="custom-select-option" data-value="vanilla">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/></svg>
-                    <span data-i18n="themeVanilla">Ванилла</span>
-                  </div>
-                  <div class="custom-select-option" data-value="survival">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
-                    <span data-i18n="themeSurvival">Выживание</span>
-                  </div>
-                  <div class="custom-select-option" data-value="creative">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
-                    <span data-i18n="themeCreative">Творческий</span>
-                  </div>
-                  <div class="custom-select-option" data-value="minigames">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h4"/><path d="M8 10v4"/><circle cx="15" cy="13" r="1"/><circle cx="18" cy="11" r="1"/></svg>
-                    <span data-i18n="themeMinigames">Мини-игры</span>
-                  </div>
-                  <div class="custom-select-option" data-value="anarchy">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M8 20v2h8v-2"/><path d="m12.5 17-.5-1-.5 1h1z"/><path d="M16 20a2 2 0 0 0 1.56-3.25 8 8 0 1 0-11.12 0A2 2 0 0 0 8 20"/></svg>
-                    <span data-i18n="themeAnarchy">Анархия</span>
-                  </div>
-                  <div class="custom-select-option" data-value="modded">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                    <span data-i18n="themeModded">С модами</span>
-                  </div>
-                </div>
-              </div>
+            <div class="filter-chip-grid">
+              <button type="button" class="filter-chip" data-filter-theme="survival"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/></svg><span data-i18n="themeSurvival">Выживание</span></button>
+              <button type="button" class="filter-chip" data-filter-theme="vanilla"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/></svg><span data-i18n="themeVanilla">Ванилла</span></button>
+              <button type="button" class="filter-chip" data-filter-theme="creative"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg><span data-i18n="themeCreative">Творческий</span></button>
+              <button type="button" class="filter-chip" data-filter-theme="minigames"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h4"/><path d="M8 10v4"/></svg><span data-i18n="themeMinigames">Мини-игры</span></button>
+              <button type="button" class="filter-chip" data-filter-theme="anarchy"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M16 20a2 2 0 0 0 1.56-3.25 8 8 0 1 0-11.12 0A2 2 0 0 0 8 20"/></svg><span data-i18n="themeAnarchy">Анархия</span></button>
+              <button type="button" class="filter-chip" data-filter-theme="pvp"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m14.5 17.5-5-5 2-7L4 2l3.5 7.5-2 2 5 5z"/></svg><span data-i18n="themePvp">PvP</span></button>
+              <button type="button" class="filter-chip" data-filter-theme="rpg"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 5 4 4"/><path d="m2 22 5.5-1.5L21 7a2.12 2.12 0 0 0-3-3L4.5 17.5Z"/></svg><span data-i18n="themeRpg">РПГ</span></button>
+              <button type="button" class="filter-chip" data-filter-theme="war"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg><span data-i18n="themeWar">Война</span></button>
+              <button type="button" class="filter-chip" data-filter-theme="horror"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s-8-4.5-8-11.8A8 8 0 0 1 12 2a8 8 0 0 1 8 8.2c0 7.3-8 11.8-8 11.8z"/></svg><span data-i18n="themeHorror">Хоррор</span></button>
+              <button type="button" class="filter-chip" data-filter-theme="shop"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/></svg><span data-i18n="themeShop">Магазин</span></button>
+              <button type="button" class="filter-chip" data-filter-theme="modded"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-2.15.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9 1.65 1.65 0 0 0 4.27 7.18l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 2.82 1.51l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span data-i18n="themeModded">С модами</span></button>
+              <button type="button" class="filter-chip" data-filter-theme="other"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg><span data-i18n="themeOther">Другое</span></button>
             </div>
-          </label>
+          </div>
+
+          <!-- Тип -->
+          <div class="filter-section">
+            <div class="filter-section-head">
+              <span data-i18n="filterSectionType">Тип</span>
+              <button class="filter-clear-btn" data-clear="type" data-i18n="filterClear">Сбросить</button>
+            </div>
+            <select id="filter-type" class="visually-hidden">
+              <option value="all" data-i18n="filterTypeAll">Все</option>
+              <option value="global" data-i18n="filterTypeGlobal">Глобальный</option>
+              <option value="local" data-i18n="filterTypeLocal">Локальный</option>
+            </select>
+            <div class="filter-chip-grid">
+              <button type="button" class="filter-chip" data-filter-type="global"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg><span data-i18n="filterTypeGlobal">Глобальный</span></button>
+              <button type="button" class="filter-chip" data-filter-type="local"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg><span data-i18n="filterTypeLocal">Локальный</span></button>
+            </div>
+          </div>
         </div>
 
-        <div class="modal-actions">
-          <button id="apply-filters-button" class="primary-button" type="button" data-i18n="filterApplyButton">Применить фильтры</button>
+        <div class="filter-footer">
+          <button id="reset-filters-button" class="filter-reset-btn" type="button" title="Сбросить все">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+          </button>
+          <button id="apply-filters-button" class="primary-button" type="button" style="flex:1" data-i18n="filterApply">Применить</button>
         </div>
       </div>
     </div>

@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use std::{
     fs,
     io::{self, Cursor},
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 use tauri::{AppHandle, Emitter};
 use zip::ZipArchive;

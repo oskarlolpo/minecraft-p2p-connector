@@ -44,4 +44,5 @@ rand = "0.9.4"
 hex = "0.4.3"
 zip = "7.2.0"
 tempfile = "3.27.0"
+get_if_addrs = "0.5.3"
 
