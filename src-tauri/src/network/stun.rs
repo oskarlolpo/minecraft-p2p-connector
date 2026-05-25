@@ -135,12 +135,14 @@ fn rand_tx_id() -> [u8; 12] {
 /// - Если IP одинаковый, но порты разные → Symmetric NAT  
 /// - Если один из запросов фейлит → Restricted / Firewall
 pub async fn detect_nat_type() -> NatTypeResult {
-    let socket = match UdpSocket::bind("0.0.0.0:0").await {
+    let local_ip = crate::network::upnp::get_local_ip().unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+    let bind_addr = SocketAddr::new(local_ip, 0);
+    let socket = match UdpSocket::bind(bind_addr).await {
         Ok(s) => s,
         Err(e) => {
             return NatTypeResult {
                 nat_type: "error".into(),
-                note: format!("Failed to bind UDP socket: {e}"),
+                note: format!("Failed to bind UDP socket to {bind_addr}: {e}"),
                 ..Default::default()
             }
         }

@@ -1227,7 +1227,9 @@ impl NetworkManager {
     }
 
     fn bind_shared_udp_socket() -> Result<(std::net::UdpSocket, Arc<UdpSocket>, SocketAddr)> {
-        let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
+        let local_ip = super::upnp::get_local_ip().unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+        let bind_addr = SocketAddr::new(local_ip, 0);
+        let socket = std::net::UdpSocket::bind(bind_addr)?;
         socket.set_nonblocking(true)?;
         let addr = socket.local_addr()?;
         let tokio_socket = Arc::new(UdpSocket::from_std(socket.try_clone()?)?);
@@ -1546,8 +1548,22 @@ impl NetworkManager {
     }
 
     async fn start_upnp_mapping(&self, local_port: u16) -> Option<super::upnp::UpnpMapping> {
+        let _ = self.push_log("==== СЕТЕВЫЕ ИНТЕРФЕЙСЫ (ДИАГНОСТИКА) ====".into()).await;
+        if let Ok(interfaces) = get_if_addrs::get_if_addrs() {
+            let mut addrs = Vec::new();
+            for iface in interfaces {
+                if !iface.ip().is_loopback() {
+                    addrs.push(format!("{} ({})", iface.ip(), iface.name));
+                }
+            }
+            let _ = self.push_log(format!("Обнаружены интерфейсы: {}", addrs.join(", "))).await;
+        }
+
         match super::upnp::UpnpMapping::attempt_map(local_port, "Minecraft P2P Connector").await {
-            Ok(mapping) => Some(mapping),
+            Ok(mapping) => {
+                let _ = self.push_log(format!("UPnP: Порт {} успешно проброшен.", local_port)).await;
+                Some(mapping)
+            },
             Err(e) => {
                 let _ = self.push_log(format!("UPnP mapping failed: {e:#}")).await;
                 None

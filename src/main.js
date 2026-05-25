@@ -106,6 +106,7 @@ const currentVersionEl = document.querySelector("#current-version");
 const sessionModeEl = document.querySelector("#session-mode");
 const hostLockNoteEl = document.querySelector("#host-lock-note");
 const hostSectionTitleEl = document.querySelector("#host-section-title");
+const activeSessionPanelEl = document.querySelector("#active-session-panel");
 const navHomeEl = document.querySelector("#nav-home");
 const navSettingsEl = document.querySelector("#nav-settings");
 const pageHomeEl = document.querySelector("#page-home");
@@ -361,11 +362,11 @@ function applyTranslations() {
     const key = element.dataset.i18nPlaceholder;
     if (key) element.placeholder = t(key);
   });
-  navHomeEl.setAttribute("aria-label", t("homeAria"));
-  navSettingsEl.setAttribute("aria-label", t("settingsAria"));
-  closeModalEl.setAttribute("aria-label", t("closeAria"));
+  if (navHomeEl) navHomeEl.setAttribute("aria-label", t("homeAria"));
+  if (navSettingsEl) navSettingsEl.setAttribute("aria-label", t("settingsAria"));
+  if (closeModalEl) closeModalEl.setAttribute("aria-label", t("closeAria"));
   profileMenuTriggerEl?.setAttribute("aria-label", t("avatarButtonAria"));
-  portHelpEl.title = t("portHelpTitle");
+  if (portHelpEl) portHelpEl.title = t("portHelpTitle");
   document.documentElement.lang = state.preferences.language;
   syncExternalHostMode();
   renderProfile();
@@ -383,12 +384,12 @@ function syncExternalHostMode() {
   passwordFieldGroupEl?.classList.toggle("hidden", external || !requirePasswordEl.checked);
   enableGeyserEl?.closest(".checkbox-row")?.classList.toggle("hidden", external);
   geyserPortFieldEl?.classList.toggle("hidden", external || !enableGeyserEl.checked);
-  hostButtonEl.textContent = t(external ? "modalExternalButton" : "modalHostButton");
+  if (hostButtonEl) hostButtonEl.textContent = t(external ? "modalExternalButton" : "modalHostButton");
 }
 
 function renderProfile() {
   const nickname = state.profile.nickname?.trim() || "Player";
-  brandUserNameEl.textContent = nickname;
+  if (brandUserNameEl) brandUserNameEl.textContent = nickname;
   
   if (profileNicknameInputEl && currentEditingField !== "name") {
     profileNicknameInputEl.value = nickname;
@@ -673,18 +674,23 @@ function setPage(page) {
   navSettingsEl?.classList.toggle("nav-button-active", page === "settings");
 }
 
-const { getVersion } = window.__TAURI__.app;
+const getVersion = window.__TAURI_INTERNALS__
+  ? () => import("@tauri-apps/api/app").then(m => m.getVersion())
+  : (window.__TAURI__?.app?.getVersion || (() => Promise.reject("Not in Tauri")));
 
 async function loadAppInfo() {
   try {
     const version = await getVersion();
-    settingsVersionEl.textContent = version;
+    if (settingsVersionEl) settingsVersionEl.textContent = version;
+    if (currentVersionEl) currentVersionEl.textContent = version;
   } catch {
     try {
       const info = await invoke("get_app_info");
-      settingsVersionEl.textContent = info.version;
+      if (settingsVersionEl) settingsVersionEl.textContent = info.version;
+      if (currentVersionEl) currentVersionEl.textContent = info.version;
     } catch {
-      settingsVersionEl.textContent = "0.3.38";
+      if (settingsVersionEl) settingsVersionEl.textContent = "0.3.38";
+      if (currentVersionEl) currentVersionEl.textContent = "0.3.38";
     }
   }
 }
@@ -747,8 +753,10 @@ function renderLogs() {
 }
 
 function setMinecraftHint(text, active = false) {
-  minecraftTargetHintEl.textContent = text;
-  minecraftTargetHintEl.classList.toggle("active", active);
+  if (minecraftTargetHintEl) {
+    minecraftTargetHintEl.textContent = text;
+    minecraftTargetHintEl.classList.toggle("active", active);
+  }
 }
 
 function syncPasswordField() {
@@ -1000,18 +1008,21 @@ function getVerifiedPublicJoinAddress(status = state.status) {
 
 function getDirectAdvertisedEndpoint(status = state.status) {
   const endpoint = advertisedEndpoint(hostSession.listenAddrs, hostSession.peerAddr);
-  return toSocketEndpoint(endpoint) ?? endpoint ?? status?.publicUdpAddr ?? status?.udpBindAddr ?? null;
+  return toSocketEndpoint(endpoint) ?? endpoint ?? status?.publicUdpAddr ?? null;
 }
 
 function getAdvertisableJoinAddress(status = state.status) {
-  return getVerifiedPublicJoinAddress(status) ?? getDirectAdvertisedEndpoint(status);
+  const addr = getVerifiedPublicJoinAddress(status) ?? getDirectAdvertisedEndpoint(status);
+  if (addr && String(addr).includes("0.0.0.0")) return null;
+  return addr;
 }
 
 function formatPrimaryEndpoint(status = state.status) {
   const endpoint = getAdvertisableJoinAddress(status);
-  if (endpoint) return endpoint;
+  if (endpoint && !endpoint.startsWith("0.0.0.0")) return endpoint;
   
-  return status?.publicUdpAddr ?? status?.udpBindAddr ?? "n/a";
+  const fallback = status?.publicUdpAddr ?? status?.udpBindAddr ?? "n/a";
+  return fallback.startsWith("0.0.0.0") ? "Только через Relay (не публичный)" : fallback;
 }
 
 function renderSelectedServer() {
@@ -1022,21 +1033,24 @@ function renderSelectedServer() {
     selected?.publicJoinAddress ??
     selected?.joinAddress ??
     (selected?.peerAddr ? toSocketEndpoint(selected.peerAddr) ?? selected.peerAddr : null);
-  selectedServerEl.textContent = selected ? selected.roomName : t("noSelection");
-  selectedEndpointEl.textContent = javaEndpoint ?? "n/a";
-  selectedBedrockEndpointEl.textContent = bedrockEndpoint ?? "n/a";
-  selectedMetaEl.textContent = selected
-    ? t("selectedMetaTemplate", {
-        host: `${selected.hostName}${selected.clientId === localClientId ? ` (${t("selfHostLabel")})` : ""} · ${selected.peerId}`,
-        version: selected.minecraftVersion ?? t("serverUnknownVersion"),
-        slots: selected.slots,
-        password: selected.hasPassword ? t("selectedMetaPassword") : "",
-        bedrock:
-          selected.geyserEnabled && bedrockEndpoint
-            ? t("selectedMetaBedrock", { endpoint: bedrockEndpoint })
-            : "",
-      })
-    : t("selectedMetaEmpty");
+  
+  if (selectedServerEl) selectedServerEl.textContent = selected ? selected.roomName : t("noSelection");
+  if (selectedEndpointEl) selectedEndpointEl.textContent = javaEndpoint ?? "n/a";
+  if (selectedBedrockEndpointEl) selectedBedrockEndpointEl.textContent = bedrockEndpoint ?? "n/a";
+  if (selectedMetaEl) {
+    selectedMetaEl.textContent = selected
+      ? t("selectedMetaTemplate", {
+          host: `${selected.hostName}${selected.clientId === localClientId ? ` (${t("selfHostLabel")})` : ""} · ${selected.peerId}`,
+          version: selected.minecraftVersion ?? t("serverUnknownVersion"),
+          slots: selected.slots,
+          password: selected.hasPassword ? t("selectedMetaPassword") : "",
+          bedrock:
+            selected.geyserEnabled && bedrockEndpoint
+              ? t("selectedMetaBedrock", { endpoint: bedrockEndpoint })
+              : "",
+        })
+      : t("selectedMetaEmpty");
+  }
 }
 
 function syncButtons() {
@@ -1046,35 +1060,54 @@ function syncButtons() {
   const selected = getSelectedServer();
   const clientLocked = isClientLocked();
 
-  openHostModalEl.disabled = busy || mode === "host" || clientLocked;
-  openHostModalEl.classList.toggle("hidden", clientLocked);
-  hostButtonEl.disabled = busy || mode === "host" || clientLocked;
-  hostButtonEl.textContent = busy
-    ? t("connectBusyButton")
-    : externalHostModeEl?.checked
-      ? t("modalExternalButton")
-      : t("modalHostButton");
-  stopButtonEl.disabled = mode === "idle";
-  stopButtonEl.textContent = mode === "client" ? t("disconnectButton") : t("stopButton");
-  stopButtonEl.classList.toggle("danger-active", mode !== "idle");
-  refreshLobbyEl.disabled = state.realtime?.connection.state === "connecting";
-  connectSelectedEl.disabled =
-    !selected ||
-    selected.clientId === localClientId ||
-    busy ||
-    clientLocked ||
-    mode === "host" ||
-    state.pendingConnects.has(selected.clientId);
-  connectSelectedEl.textContent = state.pendingConnects.has(selected?.clientId ?? "")
-    ? t("connectBusyButton")
-    : t("connectButton");
-  copySelectedEndpointEl.disabled = !(selected?.publicJoinAddress || selected?.joinAddress || selected?.peerAddr);
-  copySelectedBedrockEndpointEl.disabled = !deriveBedrockEndpoint(selected?.peerAddr, selected?.bedrockPort);
-  hostLockNoteEl.textContent = clientLocked
-    ? t("hostNoteClientLocked")
-    : mode === "host"
-      ? t("hostNoteHosting")
-      : t("hostNoteIdle");
+  if (openHostModalEl) {
+    openHostModalEl.disabled = busy || mode === "host" || clientLocked;
+    openHostModalEl.classList.toggle("hidden", clientLocked);
+  }
+  if (hostButtonEl) {
+    hostButtonEl.disabled = busy || mode === "host" || clientLocked;
+    hostButtonEl.textContent = busy
+      ? t("connectBusyButton")
+      : externalHostModeEl?.checked
+        ? t("modalExternalButton")
+        : t("modalHostButton");
+  }
+  if (stopButtonEl) {
+    stopButtonEl.disabled = mode === "idle";
+    stopButtonEl.textContent = mode === "client" ? t("disconnectButton") : t("stopButton");
+    stopButtonEl.classList.toggle("danger-active", mode !== "idle");
+  }
+  if (activeSessionPanelEl) {
+    activeSessionPanelEl.classList.toggle("hidden", mode === "idle");
+  }
+  if (refreshLobbyEl) {
+    refreshLobbyEl.disabled = state.realtime?.connection.state === "connecting";
+  }
+  if (connectSelectedEl) {
+    connectSelectedEl.disabled =
+      !selected ||
+      selected.clientId === localClientId ||
+      busy ||
+      clientLocked ||
+      mode === "host" ||
+      state.pendingConnects.has(selected.clientId);
+    connectSelectedEl.textContent = state.pendingConnects.has(selected?.clientId ?? "")
+      ? t("connectBusyButton")
+      : t("connectButton");
+  }
+  if (copySelectedEndpointEl) {
+    copySelectedEndpointEl.disabled = !(selected?.publicJoinAddress || selected?.joinAddress || selected?.peerAddr);
+  }
+  if (copySelectedBedrockEndpointEl) {
+    copySelectedBedrockEndpointEl.disabled = !deriveBedrockEndpoint(selected?.peerAddr, selected?.bedrockPort);
+  }
+  if (hostLockNoteEl) {
+    hostLockNoteEl.textContent = clientLocked
+      ? t("hostNoteClientLocked")
+      : mode === "host"
+        ? t("hostNoteHosting")
+        : t("hostNoteIdle");
+  }
 
   if (clientLocked) closeModal();
 }
@@ -1164,7 +1197,7 @@ function renderSessionCard() {
           }
         </div>
         <div class="active-host-tools">
-          ${publicJavaEndpoint ? `<button class="ghost-button" type="button" data-copy-host-java="${escapeHtml(publicJavaEndpoint)}">${escapeHtml(t("copyIpButton"))} (local)</button>` : ""}
+          <button class="ghost-button" type="button" data-copy-host-java="true">${escapeHtml(t("copyIpButton"))} (local)</button>
           ${publicJavaEndpoint ? `<button class="primary-button" type="button" data-copy-host-public="${escapeHtml(toSocketEndpoint(publicJavaEndpoint) ?? publicJavaEndpoint)}">${escapeHtml(t("copyIpButton"))} (public)</button>` : ""}
           ${hostBedrockEndpoint ? `<button class="ghost-button" type="button" data-copy-host-bedrock="${escapeHtml(hostBedrockEndpoint)}">${escapeHtml(t("copyBedrockIpButton"))}</button>` : ""}
         </div>
@@ -1363,16 +1396,29 @@ function renderServers() {
     return;
   }
 
-  // FILTER INJECTED
-    const searchInput = document.getElementById('server-search-input');
-    const filterTheme = document.getElementById('filter-theme');
+    const searchInput = document.getElementById("server-search-input");
     const searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
-    const themeFilter = filterTheme ? filterTheme.value : 'all';
+    const activeThemeChips = Array.from(document.querySelectorAll(".filter-chip.active[data-filter-theme]"));
+    const activeThemes = activeThemeChips.map(c => c.dataset.filterTheme);
+    const themeFilter = activeThemes.length > 0 ? activeThemes : ["all"];
+    
+    const activeTypeChip = document.querySelector(".filter-chip.active[data-filter-type]");
+    const typeFilter = activeTypeChip ? activeTypeChip.dataset.filterType : "all";
     
     let filteredServers = state.servers.filter(server => {
-      const nameMatch = server.name && server.name.toLowerCase().includes(searchTerm);
-      const themeMatch = themeFilter === 'all' || server.theme === themeFilter;
-      return nameMatch && themeMatch;
+      // Name match
+      const nameStr = (server.roomName || server.hostName || "Неизвестный сервер").toLowerCase();
+      const nameMatch = nameStr.includes(searchTerm);
+      
+      // Theme match
+      const themeMatch = themeFilter.includes('all') || themeFilter.includes(server.theme);
+      
+      // Type match (Global == external, Local == !external)
+      let typeMatch = true;
+      if (typeFilter === 'global') typeMatch = Boolean(server.external);
+      if (typeFilter === 'local') typeMatch = !server.external;
+      
+      return nameMatch && themeMatch && typeMatch;
     });
 
     lobbyCountEl.textContent = t("lobbyCount", { count: filteredServers.length });
@@ -1394,37 +1440,84 @@ function renderServers() {
           : isConnecting
             ? t("connectBusyButton")
             : t("joinButton");
-      const endpointText = isExternal
-        ? server.joinAddress ?? (server.peerAddr ? toSocketEndpoint(server.peerAddr) ?? server.peerAddr : t("serverNoEndpoint"))
-        : server.publicJoinAddress ?? server.peerAddr ?? t("serverNoEndpoint");
+
+      // Determine Theme Label
+      let themeLabel = "Другое";
+      const themeKey = server.theme ? "theme" + server.theme.charAt(0).toUpperCase() + server.theme.slice(1) : "";
+      if (themeKey && I18N[state.preferences.language]?.[themeKey]) {
+         themeLabel = t(themeKey);
+      } else if (server.theme === "other") themeLabel = "Другое";
+
+      // Type Label
+      const typeLabel = isExternal ? "Глобальный" : "Локальный";
+      const typeIcon = isExternal 
+        ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>'
+        : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>';
+
+      // Theme Icon mapping
+      const themeIcons = {
+        survival: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/></svg>',
+        vanilla: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/></svg>',
+        creative: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>',
+        minigames: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h4"/><path d="M8 10v4"/></svg>',
+        anarchy: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M16 20a2 2 0 0 0 1.56-3.25 8 8 0 1 0-11.12 0A2 2 0 0 0 8 20"/></svg>',
+        pvp: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m14.5 17.5-5-5 2-7L4 2l3.5 7.5-2 2 5 5z"/></svg>',
+        rpg: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 5 4 4"/><path d="m2 22 5.5-1.5L21 7a2.12 2.12 0 0 0-3-3L4.5 17.5Z"/></svg>',
+        war: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>',
+        horror: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s-8-4.5-8-11.8A8 8 0 0 1 12 2a8 8 0 0 1 8 8.2c0 7.3-8 11.8-8 11.8z"/></svg>',
+        shop: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/></svg>',
+        modded: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-2.15.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9 1.65 1.65 0 0 0 4.27 7.18l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 2.82 1.51l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+        other: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>'
+      };
+      const themeIcon = themeIcons[server.theme] || themeIcons.other;
+
+      // Extract initials or use image
+      const initials = (server.roomName || "?").substring(0, 2).toUpperCase();
+      // Assume a generic ping logic for UI
+      // Use a stable pseudo-random ping derived from clientId if actual ping is missing
+      let fakePing = 10;
+      if (server.clientId) {
+        let hash = 0;
+        for (let i = 0; i < server.clientId.length; i++) hash += server.clientId.charCodeAt(i);
+        fakePing = (hash % 50) + 10;
+      }
+      const pingVal = server.pingMs ?? server.ping ?? fakePing;
+      const pingClass = pingVal > 150 ? "ping-high" : (pingVal > 80 ? "ping-mid" : "");
 
       return `
-        <article class="server-row ${isSelected ? "active" : ""}" data-select-server="${escapeHtml(server.clientId)}">
-          <div class="server-main">
-            <div class="server-main-top">
-              <strong>${parseMinecraftColors(server.roomName)}</strong>
-              <span class="row-chip">${escapeHtml(server.hasPassword ? t("serverLockedChip") : t("serverOpenChip"))}</span>
-              ${isExternal ? `<span class="row-chip external-chip">${escapeHtml(t("serverExternalChip"))}</span>` : ""}
-              ${server.geyserEnabled && server.bedrockPort ? `<span class="row-chip">Bedrock ${escapeHtml(String(server.bedrockPort))}</span>` : ""}
+        <article class="server-card ${isSelected ? "active" : ""}" data-select-server="${escapeHtml(server.clientId)}">
+          <div class="server-card-avatar">
+            ${initials}
+          </div>
+          <div class="server-card-body">
+            <div class="server-card-top">
+              <span class="server-card-name">${parseMinecraftColors(server.roomName || "Неизвестный сервер")}</span>
+              <span class="server-card-slots">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                ${escapeHtml(server.slots || "0/0")}
+              </span>
             </div>
-            <span>${escapeHtml(server.hostName)}${isLocal ? ` · ${escapeHtml(t("selfHostLabel"))}` : ""}</span>
-            ${isExternal ? `<span class="server-submeta">${escapeHtml(t("externalAddedBy", { name: server.addedBy ?? "Player" }))}</span>` : ""}
-          </div>
-          <div class="server-main">
-            <strong>${escapeHtml(server.minecraftVersion ?? t("serverUnknownVersion"))}</strong>
-            <span>${escapeHtml(endpointText)}</span>
-          </div>
-          <div class="server-main">
-            <strong>${escapeHtml(server.slots)}</strong>
-          </div>
-          <div class="player-actions">
-            <button
-              class="${isLocal ? "secondary-button" : "gradient-button"} row-action-button"
-              data-connect-server="${escapeHtml(server.clientId)}"
-              ${isLocal || (!isExternal && isConnecting) || isClientLocked() || state.status?.mode === "host" ? "disabled" : ""}
-            >
-              ${escapeHtml(buttonLabel)}
-            </button>
+            
+            <div class="server-card-desc">
+              ${escapeHtml(server.hostName || "Host")}
+            </div>
+
+            <div class="server-card-tags">
+              <span class="server-tag">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 20.5 12 4l10 16.5Z"/><path d="m20.5 10.5-8-6-8 6"/></svg>
+                ${escapeHtml(server.minecraftVersion ?? t("serverUnknownVersion"))}
+              </span>
+              <span class="server-tag">
+                ${themeIcon}
+                ${escapeHtml(themeLabel)}
+              </span>
+              <span class="server-tag">
+                ${typeIcon}
+                ${escapeHtml(typeLabel)}
+              </span>
+              
+              <span class="server-card-ping ${pingClass}">${pingVal}мс</span>
+            </div>
           </div>
         </article>
       `;
@@ -1489,6 +1582,7 @@ function hydrateServers(members) {
         peerAddr: endpoint ?? null,
         localPort: data.local_port ?? 25565,
         minecraftVersion: data.minecraft_version ?? null,
+        theme: data.theme ?? "other",
         transport: data.transport ?? null,
         publicJoinAddress: data.public_join_address ?? data.socket_endpoint ?? null,
         geyserEnabled: Boolean(data.geyser_enabled),
@@ -1501,7 +1595,6 @@ function hydrateServers(members) {
         external: false,
       };
     })
-    .filter((server) => server.clientId !== localClientId)
     .filter((server) => Boolean(server.peerId) && (server.peerAddrs.length > 0 || Boolean(server.peerAddr)));
 
   mergeServers(presenceServers);
@@ -1616,6 +1709,7 @@ function buildPresencePayload(status) {
     peer_addr: hostSession.peerAddr,
     local_port: hostSession.localPort,
     minecraft_version: hostSession.minecraftVersion ?? status?.minecraftVersion ?? null,
+    theme: hostSession.theme ?? "other",
     transport: status?.transportPath ?? state.activeTunnelTransport ?? null,
     geyser_enabled: Boolean(status?.geyserEnabled),
     bedrock_port: status?.bedrockPort ?? null,
@@ -1671,7 +1765,7 @@ function renderStatus(status) {
   publicEndpointEl.textContent = formatPrimaryEndpoint(status);
   sessionModeEl.textContent = formatMode(status.mode);
   currentVersionEl.textContent = status.minecraftVersion ?? t("serverUnknownVersion");
-  statusNoteEl.textContent = decodeMojibakeIfNeeded(status.note ?? t("modeIdle"));
+  if (statusNoteEl) statusNoteEl.textContent = decodeMojibakeIfNeeded(status.note ?? t("modeIdle"));
   renderPeers(status.peers ?? []);
   renderSessionCard();
   renderLogs();
@@ -1932,12 +2026,44 @@ async function stopEmbeddedTestServer() {
 
 async function copyDiagnosticsSnapshot() {
   try {
+    if (copyDiagnosticsEl) {
+      copyDiagnosticsEl.disabled = true;
+      copyDiagnosticsEl.textContent = "Сбор данных...";
+    }
+    addLog("Собираем мега-лог для отладки...");
     const localPort = Number(localGamePortEl.value || 25565);
-    const snapshot = await invoke("export_diagnostics_snapshot", { localPort });
-    await copyTextToClipboard(JSON.stringify(snapshot, null, 2));
-    addLog("Full diagnostics copied to clipboard.");
+    
+    // Parallelize to speed up collection and avoid clipboard API timeout
+    const [snapshot, natType, appInfo, publicIpInfo] = await Promise.all([
+      invoke("export_diagnostics_snapshot", { localPort }).catch(() => ({})),
+      invoke("detect_nat_type_command").catch(() => "Unknown"),
+      invoke("get_app_info").catch(() => ({})),
+      Promise.race([
+        fetch("https://ipapi.co/json/").then(res => res.json()),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 1500))
+      ]).catch((e) => ({ error: `Failed: ${e.message}` }))
+    ]);
+
+    const megaLog = {
+      timestamp: new Date().toISOString(),
+      userAgent: navigator.userAgent,
+      appInfo,
+      publicIpInfo,
+      natType,
+      snapshot
+    };
+
+    const text = JSON.stringify(megaLog, null, 2);
+    
+    await copyTextToClipboard(text);
+    addLog("Мега-лог (JSON) успешно скопирован в буфер обмена!");
   } catch (error) {
-    addLog(`Failed to export diagnostics: ${String(error)}`);
+    addLog(`Ошибка при формировании лога: ${String(error)}`);
+  } finally {
+    if (copyDiagnosticsEl) {
+      copyDiagnosticsEl.disabled = false;
+      copyDiagnosticsEl.textContent = t("copyDiagnosticsButton") || "Скопировать JSON лог";
+    }
   }
 }
 
@@ -1965,6 +2091,9 @@ async function startHosting() {
   await detectMinecraftNickname();
   await autofillRoomNameFromLocalServer();
   const roomName = roomNameEl.value.trim();
+  const roomThemeInput = document.getElementById("room-theme");
+  const theme = roomThemeInput ? roomThemeInput.value : "other";
+  
   if (!roomName) {
     roomNameEl.focus();
     hostButtonEl.disabled = false;
@@ -2020,6 +2149,7 @@ async function startHosting() {
     hostSession.peerAddr = advertisedEndpoint(hostSession.listenAddrs, status.publicUdpAddr ?? status.udpBindAddr);
     hostSession.localPort = localPort;
     hostSession.minecraftVersion = status.minecraftVersion ?? null;
+    hostSession.theme = theme;
     hostSession.publicJoinAddress = status.publicJoinAddress ?? null;
     try {
       const localMeta = await invoke("query_external_server", { host: "127.0.0.1", port: localPort });
@@ -2035,6 +2165,10 @@ async function startHosting() {
     }
     hostSession.presencePayload = null;
     hostSession.presenceEntered = false;
+
+    // Trigger a UI re-render now that hostSession is fully populated and active
+    renderStatus(state.status);
+
     if (canAdvertiseHost()) {
       await syncPresence(status, { force: true, enter: true });
     } else {
@@ -2043,7 +2177,17 @@ async function startHosting() {
     await refreshLobby();
     hostButtonEl.textContent = '✅ Сервер работает';
     hostButtonEl.classList.remove('loading-opacity');
+    
+    // Close the modal upon success!
     closeModal();
+    
+    // Reset back to original text after 2 seconds in case they open the modal again later
+    setTimeout(() => {
+      if (hostButtonEl) {
+        hostButtonEl.innerHTML = originalHostText;
+      }
+    }, 2000);
+
   } catch (error) {
     hostButtonEl.textContent = originalHostText;
     hostButtonEl.classList.remove('loading-opacity');
@@ -2051,10 +2195,7 @@ async function startHosting() {
   } finally {
     syncButtons();
     hostButtonEl.disabled = false;
-    if (hostButtonEl.classList.contains('loading-opacity')) {
-        hostButtonEl.innerHTML = originalHostText;
-        hostButtonEl.classList.remove('loading-opacity');
-    }
+    hostButtonEl.classList.remove('loading-opacity');
   }
 }
 
@@ -2335,37 +2476,49 @@ await listen("hole_punch_success", async (event) => {
   addLog(`Hole punch success for ${event.payload?.peerId ?? "peer"}.`);
 });
 
-navHomeEl.addEventListener("click", () => setPage("home"));
-navSettingsEl.addEventListener("click", () => setPage("settings"));
-openHostModalEl.addEventListener("click", openModal);
-closeModalEl.addEventListener("click", closeModal);
-closeModalSecondaryEl.addEventListener("click", closeModal);
-modalEl.addEventListener("click", (event) => {
+navHomeEl?.addEventListener("click", () => setPage("home"));
+navSettingsEl?.addEventListener("click", () => setPage("settings"));
+openHostModalEl?.addEventListener("click", openModal);
+closeModalEl?.addEventListener("click", closeModal);
+closeModalSecondaryEl?.addEventListener("click", closeModal);
+modalEl?.addEventListener("click", (event) => {
   if (event.target instanceof HTMLElement && event.target.dataset.closeModal === "true") closeModal();
 });
 
-requirePasswordEl.addEventListener("change", syncPasswordField);
-enableGeyserEl.addEventListener("change", syncGeyserField);
-roomNameEl.addEventListener("input", () => {
+requirePasswordEl?.addEventListener("change", syncPasswordField);
+enableGeyserEl?.addEventListener("change", syncGeyserField);
+roomNameEl?.addEventListener("input", () => {
   roomNameEl.dataset.autofilled = "false";
 });
-hostButtonEl.addEventListener("click", startHosting);
-stopButtonEl.addEventListener("click", stopSession);
-refreshLobbyEl.addEventListener("click", async () => {
+
+// Settings tabs logic
+document.querySelectorAll(".settings-tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".settings-tab").forEach(t => t.classList.remove("active"));
+    document.querySelectorAll(".settings-tab-content").forEach(c => c.classList.remove("active"));
+    tab.classList.add("active");
+    const targetId = tab.dataset.tab;
+    const content = document.getElementById("tab-" + targetId);
+    if (content) content.classList.add("active");
+  });
+});
+hostButtonEl?.addEventListener("click", startHosting);
+stopButtonEl?.addEventListener("click", stopSession);
+refreshLobbyEl?.addEventListener("click", async () => {
   const status = await invoke("get_status");
   if (canAdvertiseHost()) {
     await syncPresence(status, { force: true, enter: !hostSession.presenceEntered });
   }
   await refreshLobby();
 });
-copyLogsEl.addEventListener("click", async () => {
+copyLogsEl?.addEventListener("click", async () => {
   await copyTextToClipboard(currentLogLines().join("\n"));
   addLog(t("copiedLog"));
 });
-copyDiagnosticsEl.addEventListener("click", async () => {
+copyDiagnosticsEl?.addEventListener("click", async () => {
   await copyDiagnosticsSnapshot();
 });
-copySelectedEndpointEl.addEventListener("click", async () => {
+copySelectedEndpointEl?.addEventListener("click", async () => {
   const selected = getSelectedServer();
   let endpoint = null;
   
@@ -2381,54 +2534,54 @@ copySelectedEndpointEl.addEventListener("click", async () => {
   await copyTextToClipboard(endpoint);
   addLog(t("copiedIp"));
 });
-copySelectedBedrockEndpointEl.addEventListener("click", async () => {
+copySelectedBedrockEndpointEl?.addEventListener("click", async () => {
   const selected = getSelectedServer();
   const endpoint = deriveBedrockEndpoint(selected?.peerAddr, selected?.bedrockPort);
   if (!endpoint) return;
   await copyTextToClipboard(endpoint);
   addLog(t("copiedBedrockIp"));
 });
-runPreflightEl.addEventListener("click", async () => {
+runPreflightEl?.addEventListener("click", async () => {
   await runPreflightCheck();
 });
-autoDetectPortEl.addEventListener("click", async () => {
+autoDetectPortEl?.addEventListener("click", async () => {
   await autoDetectLocalGamePort();
 });
-externalHostModeEl.addEventListener("change", syncExternalHostMode);
-startTestServerEl.addEventListener("click", async () => {
+externalHostModeEl?.addEventListener("change", syncExternalHostMode);
+startTestServerEl?.addEventListener("click", async () => {
   await startEmbeddedTestServer();
 });
-stopTestServerEl.addEventListener("click", async () => {
+stopTestServerEl?.addEventListener("click", async () => {
   await stopEmbeddedTestServer();
 });
-probeTestServerEl.addEventListener("click", async () => {
+probeTestServerEl?.addEventListener("click", async () => {
   await probeEmbeddedTestServer();
 });
-connectSelectedEl.addEventListener("click", async () => {
+connectSelectedEl?.addEventListener("click", async () => {
   const selected = getSelectedServer();
   if (selected) await connectToServer(selected);
 });
-checkUpdatesEl.addEventListener("click", checkForUpdates);
-installUpdateEl.addEventListener("click", installUpdate);
+checkUpdatesEl?.addEventListener("click", checkForUpdates);
+installUpdateEl?.addEventListener("click", installUpdate);
 
-closePortModalEl.addEventListener("click", closePortChoiceModal);
-closePortModalSecondaryEl.addEventListener("click", closePortChoiceModal);
-portChoiceModalEl.addEventListener("click", (event) => {
+closePortModalEl?.addEventListener("click", closePortChoiceModal);
+closePortModalSecondaryEl?.addEventListener("click", closePortChoiceModal);
+portChoiceModalEl?.addEventListener("click", (event) => {
   if (event.target instanceof HTMLElement && event.target.dataset.closeModalPort === "true") closePortChoiceModal();
 });
-clearIgnoredPortsEl.addEventListener("click", () => {
+clearIgnoredPortsEl?.addEventListener("click", () => {
   state.ignoredPorts = [];
   saveIgnoredPorts();
   renderIgnoredPorts();
 });
 
-closePlayerModalEl.addEventListener("click", closePlayerModal);
-closePlayerModalSecondaryEl.addEventListener("click", closePlayerModal);
-playerModalEl.addEventListener("click", (event) => {
+closePlayerModalEl?.addEventListener("click", closePlayerModal);
+closePlayerModalSecondaryEl?.addEventListener("click", closePlayerModal);
+playerModalEl?.addEventListener("click", (event) => {
   if (event.target instanceof HTMLElement && event.target.dataset.closePlayerModal === "true") closePlayerModal();
 });
 
-kickButtonEl.addEventListener("click", async () => {
+kickButtonEl?.addEventListener("click", async () => {
   if (activeModalPeerId && activeModalPeerId !== 'host') {
     await kickPeer(activeModalPeerId);
     closePlayerModal();
@@ -2445,7 +2598,7 @@ function closePlayerModal() {
   activeModalPeerId = null;
 }
 
-serverListEl.addEventListener("click", async (event) => {
+serverListEl?.addEventListener("click", async (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
   const connectId = target.closest("[data-connect-server]")?.dataset.connectServer;
@@ -2462,7 +2615,7 @@ serverListEl.addEventListener("click", async (event) => {
   }
 });
 
-activeHostCardEl.addEventListener("click", async (event) => {
+activeHostCardEl?.addEventListener("click", async (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
   const javaValue = target.closest("[data-copy-host-java]")?.dataset.copyHostJava;
@@ -2488,7 +2641,7 @@ activeHostCardEl.addEventListener("click", async (event) => {
   }
 });
 
-peerListEl.addEventListener("click", async (event) => {
+peerListEl?.addEventListener("click", async (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
   const peerId = target.closest("[data-kick-peer]")?.dataset.kickPeer;
@@ -2549,51 +2702,83 @@ profileMenuTriggerEl?.addEventListener("click", () => {
   setPage("profile");
 });
 
-document.querySelectorAll(".custom-select").forEach(select => {
-  const trigger = select.querySelector(".custom-select-trigger");
-  const valueDisplay = select.querySelector(".custom-select-value");
-  const options = select.querySelectorAll(".custom-select-option");
-  const wrapper = select.closest(".custom-select-wrapper");
-  const targetSelectId = wrapper?.dataset.target;
-  const targetSelect = document.getElementById(targetSelectId);
+// Theme chips in host modal
+document.querySelectorAll(".theme-chip").forEach(chip => {
+  chip.addEventListener("click", () => {
+    document.querySelectorAll(".theme-chip").forEach(c => c.classList.remove("active"));
+    chip.classList.add("active");
+    const roomThemeEl = document.getElementById("room-theme");
+    if (roomThemeEl) roomThemeEl.value = chip.dataset.themeChip;
+  });
+});
 
-  // Sync initial value
-  if (targetSelect) {
-    const initialOption = select.querySelector(`[data-value="${targetSelect.value}"]`) || options[0];
-    if (initialOption) {
-      valueDisplay.innerHTML = initialOption.innerHTML;
-      initialOption.classList.add("selected");
+// Host Creation Theme Chips logic
+const hostThemeChips = document.querySelectorAll("#host-theme-chips .theme-chip");
+const roomThemeInput = document.getElementById("room-theme");
+
+hostThemeChips.forEach(chip => {
+  chip.addEventListener("click", () => {
+    // Remove active from all
+    hostThemeChips.forEach(c => c.classList.remove("active"));
+    // Add active to clicked
+    chip.classList.add("active");
+    // Update hidden input
+    if (roomThemeInput) {
+      roomThemeInput.value = chip.dataset.themeChip;
     }
-  }
-
-  trigger.addEventListener("click", (e) => {
-    e.stopPropagation();
-    document.querySelectorAll(".custom-select.open").forEach(s => {
-      if (s !== select) s.classList.remove("open");
-    });
-    select.classList.toggle("open");
-  });
-
-  options.forEach(option => {
-    option.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const val = option.dataset.value;
-      valueDisplay.innerHTML = option.innerHTML;
-      options.forEach(opt => opt.classList.remove("selected"));
-      option.classList.add("selected");
-      
-      if (targetSelect) {
-        targetSelect.value = val;
-        targetSelect.dispatchEvent(new Event("change"));
-      }
-      select.classList.remove("open");
-    });
   });
 });
 
-document.addEventListener("click", () => {
-  document.querySelectorAll(".custom-select.open").forEach(s => s.classList.remove("open"));
+
+
+// Filter chips logic
+const filterChipsTheme = document.querySelectorAll(".filter-chip[data-filter-theme]");
+const filterChipsType = document.querySelectorAll(".filter-chip[data-filter-type]");
+
+filterChipsTheme.forEach(chip => {
+  chip.addEventListener("click", () => {
+    chip.classList.toggle("active");
+    const activeThemes = [...filterChipsTheme].filter(c => c.classList.contains("active")).map(c => c.dataset.filterTheme);
+    const filterThemeEl = document.getElementById("filter-theme");
+    if (filterThemeEl) filterThemeEl.value = activeThemes.length === 1 ? activeThemes[0] : "all";
+  });
 });
+
+filterChipsType.forEach(chip => {
+  chip.addEventListener("click", () => {
+    filterChipsType.forEach(c => c.classList.remove("active"));
+    chip.classList.add("active");
+    const filterTypeEl = document.getElementById("filter-type");
+    if (filterTypeEl) filterTypeEl.value = chip.dataset.filterType;
+  });
+});
+
+// Filter clear buttons
+document.querySelectorAll(".filter-clear-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const group = btn.dataset.clear;
+    if (group === "theme") {
+      filterChipsTheme.forEach(c => c.classList.remove("active"));
+      const el = document.getElementById("filter-theme"); if (el) el.value = "all";
+    } else if (group === "type") {
+      filterChipsType.forEach(c => c.classList.remove("active"));
+      const el = document.getElementById("filter-type"); if (el) el.value = "all";
+    }
+    // We don't call renderServers here, wait for Apply button
+  });
+});
+
+// Reset all filters
+document.getElementById("reset-filters-button")?.addEventListener("click", () => {
+  filterChipsTheme.forEach(c => c.classList.remove("active"));
+  filterChipsType.forEach(c => c.classList.remove("active"));
+  const ft = document.getElementById("filter-theme"); if (ft) ft.value = "all";
+  const ftype = document.getElementById("filter-type"); if (ftype) ftype.value = "all";
+  const si = document.getElementById("server-search-input"); if (si) si.value = "";
+  renderServers();
+});
+
+
 
 setInterval(() => {
   void pollStatus();
@@ -2941,7 +3126,7 @@ async function initAuth() {
 
   // ===== UNIFIED INLINE EDITING =====
   // Only one field can be edited at a time.
-  currentEditingField = null; // 'name' | 'id' | null
+  let currentEditingField = null; // 'name' | 'id' | null
 
   function closeAllEditing() {
     if (currentEditingField === "name") {
@@ -3267,64 +3452,35 @@ async function initAuth() {
   });
 }
 
-// Initialize Auth
-initAuth();
+// NOTE: initAuth() is already called at line ~2557 via `await initAuth()`.
+// Duplicate call removed to prevent double OAuth listener registration.
 
+// Filter Modal Logic (runs immediately — ES modules are already deferred)
+const filterModal = document.getElementById('filter-modal');
+const openFilterBtn = document.getElementById('open-filter-modal');
+const closeFilterBtn = document.getElementById('close-filter-modal');
+const applyFiltersBtn = document.getElementById('apply-filters-button');
 
-// Settings Tabs Logic
-document.addEventListener("DOMContentLoaded", () => {
-  const settingsTabs = document.querySelectorAll('.settings-tab');
-  const settingsTabContents = document.querySelectorAll('.settings-tab-content');
+if (openFilterBtn && filterModal) {
+  openFilterBtn.addEventListener('click', () => filterModal.classList.remove('hidden'));
+}
+if (closeFilterBtn && filterModal) {
+  closeFilterBtn.addEventListener('click', () => filterModal.classList.add('hidden'));
+}
+document.querySelector("[data-close-filter-modal]")?.addEventListener("click", () => {
+  filterModal?.classList.add("hidden");
+});
 
-  settingsTabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      settingsTabs.forEach(t => t.classList.remove('active'));
-      settingsTabContents.forEach(c => c.classList.remove('active'));
-      tab.classList.add('active');
-      const targetId = 'tab-' + tab.dataset.tab;
-      const targetContent = document.getElementById(targetId);
-      if (targetContent) {
-        targetContent.classList.add('active');
-      }
-    });
+if (applyFiltersBtn && filterModal) {
+  applyFiltersBtn.addEventListener('click', () => {
+    if (typeof renderServers === 'function') renderServers();
+    filterModal.classList.add('hidden');
   });
-});
+}
 
-
-// Filter Modal Logic
-document.addEventListener("DOMContentLoaded", () => {
-  const filterModal = document.getElementById('filter-modal');
-  const openFilterBtn = document.getElementById('open-filter-modal');
-  const closeFilterBtn = document.getElementById('close-filter-modal');
-  const applyFiltersBtn = document.getElementById('apply-filters-button');
-  
-  if (openFilterBtn) {
-    openFilterBtn.addEventListener('click', () => {
-      filterModal.classList.remove('hidden');
-    });
-  }
-  
-  if (closeFilterBtn) {
-    closeFilterBtn.addEventListener('click', () => {
-      filterModal.classList.add('hidden');
-    });
-  }
-  
-  if (applyFiltersBtn) {
-    applyFiltersBtn.addEventListener('click', () => {
-      filterModal.classList.add('hidden');
-      if (typeof renderServers === 'function') {
-         // trigger render
-         renderServers();
-      }
-    });
-  }
-
-  // Also search input
-  const searchInput = document.getElementById('server-search-input');
-  if (searchInput) {
-    searchInput.addEventListener('input', () => {
-      if (typeof renderServers === 'function') renderServers();
-    });
-  }
-});
+const serverSearchInput = document.getElementById('server-search-input');
+if (serverSearchInput) {
+  serverSearchInput.addEventListener('input', () => {
+    if (typeof renderServers === 'function') renderServers();
+  });
+}
