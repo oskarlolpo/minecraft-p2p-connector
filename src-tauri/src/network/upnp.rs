@@ -95,6 +95,17 @@ impl UpnpMapping {
 }
 
 pub fn get_local_ip() -> Result<std::net::IpAddr> {
+    // Лучший и самый надежный способ определить основной интерфейс,
+    // имеющий доступ в интернет, — позволить ОС выбрать маршрут.
+    if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+        if socket.connect("8.8.8.8:80").is_ok() {
+            if let Ok(local_addr) = socket.local_addr() {
+                return Ok(local_addr.ip());
+            }
+        }
+    }
+
+    // Если интернета нет, пытаемся найти хоть какой-то IPv4
     if let Ok(interfaces) = get_if_addrs::get_if_addrs() {
         for iface in interfaces {
             let name = iface.name.to_lowercase();
@@ -111,11 +122,7 @@ pub fn get_local_ip() -> Result<std::net::IpAddr> {
         }
     }
     
-    // Фоллбэк: старый метод
-    let socket = UdpSocket::bind("0.0.0.0:0")?;
-    socket.connect("8.8.8.8:80")?;
-    let local_addr = socket.local_addr()?;
-    Ok(local_addr.ip())
+    anyhow::bail!("Не удалось найти локальный IP адрес")
 }
 
 impl Drop for UpnpMapping {

@@ -90,24 +90,26 @@ pub async fn probe_external_server(host: String, port: u16) -> Result<ExternalSe
 }
 
 pub async fn build_preflight_report(port: u16) -> PreflightReport {
-    let mut note_parts = Vec::new();
-    
-    // Check if it's a server (Paper/Purpur) to recommend SkinsRestorer
-    if let Ok(candidates) = task::spawn_blocking(detect_all_lan_ports_blocking).await {
-        if let Ok(ports) = candidates {
-            if let Some(det) = ports.iter().find(|p| p.port == port) {
-                if det.source_line.to_lowercase().contains("paper") || det.source_line.to_lowercase().contains("purpur") || det.source_line.to_lowercase().contains("spigot") {
-                    note_parts.push("Detected a Paper/Purpur/Spigot server. For skin support, consider installing the SkinsRestorer plugin.".to_string());
-                }
-            }
-        }
+    if let Err(reachability_error) = probe_local_tcp(port).await {
+        return PreflightReport {
+            local_port: port,
+            reachable: false,
+            state: LocalTargetState::Unreachable,
+            minecraft_version: None,
+            recommended_host_action:
+                "Open the world to LAN or start the local Minecraft server, then try hosting again.".into(),
+            note: Some(format!(
+                "Local TCP reachability check failed: {reachability_error:#}"
+            )),
+        };
     }
 
     match detect_local_version(port).await {
         Ok(version) => {
             let mut note = "The world is already open to LAN or the local server is accepting connections.".to_string();
-            if !note_parts.is_empty() {
-                note = format!("{}\n\nTips: {}", note, note_parts.join(" "));
+            let version_lower = version.to_lowercase();
+            if version_lower.contains("paper") || version_lower.contains("purpur") || version_lower.contains("spigot") {
+                note = format!("{}\n\nTips: Detected a Paper/Purpur/Spigot server. For skin support, consider installing the SkinsRestorer plugin.", note);
             }
             PreflightReport {
                 local_port: port,
@@ -119,8 +121,8 @@ pub async fn build_preflight_report(port: u16) -> PreflightReport {
                 note: Some(note),
             }
         },
-        Err(version_error) => match probe_local_tcp(port).await {
-            Ok(()) => PreflightReport {
+        Err(version_error) => {
+            PreflightReport {
                 local_port: port,
                 reachable: true,
                 state: LocalTargetState::Reachable,
@@ -128,19 +130,8 @@ pub async fn build_preflight_report(port: u16) -> PreflightReport {
                 recommended_host_action:
                     "The TCP port is reachable, but Minecraft version detection failed. You can still launch the host.".into(),
                 note: Some(format!("Version detection failed during status ping: {version_error:#}")),
-            },
-            Err(reachability_error) => PreflightReport {
-                local_port: port,
-                reachable: false,
-                state: LocalTargetState::Unreachable,
-                minecraft_version: None,
-                recommended_host_action:
-                    "Open the world to LAN or start the local Minecraft server, then try hosting again.".into(),
-                note: Some(format!(
-                    "Local TCP reachability check failed: {reachability_error:#}; status ping: {version_error:#}"
-                )),
-            },
-        },
+            }
+        }
     }
 }
 
@@ -209,33 +200,38 @@ pub async fn read_local_player_snapshot(port: u16) -> Result<LocalPlayerSnapshot
 
 async fn query_status(host: &str, port: u16, protocol_version: i32) -> Result<StatusResponse> {
     let target = format!("{host}:{port}");
-    let mut stream = timeout(Duration::from_secs(2), TcpStream::connect(&target))
+    let fut = async {
+        let mut stream = TcpStream::connect(&target)
+            .await
+            .with_context(|| format!("failed to connect to {target}"))?;
+
+        let handshake = build_handshake_packet(host, port, protocol_version)?;
+        stream.write_all(&handshake).await?;
+        stream.write_all(&[0x01, 0x00]).await?;
+        stream.flush().await?;
+
+        let _packet_length = read_varint(&mut stream).await?;
+        let packet_id = read_varint(&mut stream).await?;
+        if packet_id != 0 {
+            return Err(anyhow!("unexpected packet id {packet_id}"));
+        }
+
+        let payload_len = read_varint(&mut stream).await?;
+        if payload_len < 0 {
+            return Err(anyhow!("received a negative status payload length"));
+        }
+
+        let mut payload = vec![0u8; payload_len as usize];
+        stream.read_exact(&mut payload).await?;
+
+        let response: StatusResponse =
+            serde_json::from_slice(&payload).context("failed to parse Minecraft status JSON")?;
+        Ok(response)
+    };
+
+    timeout(Duration::from_secs(2), fut)
         .await
-        .context("timed out while connecting to the local Minecraft target")?
-        .with_context(|| format!("failed to connect to {target}"))?;
-
-    let handshake = build_handshake_packet(host, port, protocol_version)?;
-    stream.write_all(&handshake).await?;
-    stream.write_all(&[0x01, 0x00]).await?;
-    stream.flush().await?;
-
-    let _packet_length = read_varint(&mut stream).await?;
-    let packet_id = read_varint(&mut stream).await?;
-    if packet_id != 0 {
-        return Err(anyhow!("unexpected packet id {packet_id}"));
-    }
-
-    let payload_len = read_varint(&mut stream).await?;
-    if payload_len < 0 {
-        return Err(anyhow!("received a negative status payload length"));
-    }
-
-    let mut payload = vec![0u8; payload_len as usize];
-    stream.read_exact(&mut payload).await?;
-
-    let response: StatusResponse =
-        serde_json::from_slice(&payload).context("failed to parse Minecraft status JSON")?;
-    Ok(response)
+        .context("timed out while querying the local Minecraft target")?
 }
 
 async fn detect_status_response(host: &str, port: u16) -> Result<StatusResponse> {

@@ -394,7 +394,14 @@ impl NetworkManager {
         })
         .await;
 
-        let minecraft_version = match minecraft::detect_local_version(local_port).await {
+        let (udp_socket, punch_socket, udp_bind_addr) = Self::bind_shared_udp_socket()?;
+
+        let version_fut = minecraft::detect_local_version(local_port);
+        let stun_fut = discover_public_addr(punch_socket.clone(), &self.inner.stun);
+        
+        let (version_res, public_udp_addr_res) = tokio::join!(version_fut, stun_fut);
+
+        let minecraft_version = match version_res {
             Ok(version) => Some(version),
             Err(error) => {
                 self.push_log(format!(
@@ -405,8 +412,6 @@ impl NetworkManager {
             }
         };
 
-        let (udp_socket, punch_socket, udp_bind_addr) = Self::bind_shared_udp_socket()?;
-        let public_udp_addr_res = discover_public_addr(punch_socket.clone(), &self.inner.stun).await;
         let public_udp_addr_str = match &public_udp_addr_res {
             Ok(addr) => Some(addr.to_string()),
             Err(e) => {
@@ -460,8 +465,6 @@ impl NetworkManager {
             cancel.clone(),
         );
 
-        let upnp_mapping = self.start_upnp_mapping(local_port).await;
-
         *self.inner.session.lock().await = Some(SessionRuntime {
             cancel,
             tasks: vec![accept_task],
@@ -474,8 +477,17 @@ impl NetworkManager {
                 live_connections,
                 relay_sessions,
                 e4mc_runtime,
-                upnp_mapping,
+                upnp_mapping: None,
             }),
+        });
+        
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            if let Some(mapping) = self_clone.start_upnp_mapping(local_port).await {
+                if let Some(SessionRuntime { control: SessionControl::Host(ref mut host), .. }) = self_clone.inner.session.lock().await.as_mut() {
+                    host.upnp_mapping = Some(mapping);
+                }
+            }
         });
 
         Ok(public_udp_addr_str.unwrap_or_default())

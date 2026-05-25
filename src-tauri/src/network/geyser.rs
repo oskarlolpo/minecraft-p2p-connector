@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::{sync::Mutex, task};
 
 use crate::models::GeyserRuntimeInfo;
@@ -25,6 +25,7 @@ pub struct GeyserManager {
 struct GeyserState {
     child: Option<Child>,
     info: GeyserRuntimeInfo,
+    upnp_mapping: Option<crate::network::upnp::UpnpMapping>,
 }
 
 impl GeyserManager {
@@ -61,7 +62,7 @@ impl GeyserManager {
         fs::create_dir_all(&runtime_dir)
             .with_context(|| format!("failed to create Geyser runtime dir {}", runtime_dir.display()))?;
 
-        let source_jar = resolve_source_jar()?;
+        let source_jar = resolve_source_jar(&app)?;
         let runtime_jar = runtime_dir.join(GEYSER_JAR_NAME);
         if runtime_jar != source_jar {
             fs::copy(&source_jar, &runtime_jar).with_context(|| {
@@ -83,6 +84,18 @@ impl GeyserManager {
         let firewall_result = ensure_firewall_rule(resolved_bedrock_port);
         let firewall_rule_name = firewall_result.as_ref().ok().cloned();
         let firewall_note = firewall_result.err().map(|error| error.to_string());
+        
+        let inner_clone = self.inner.clone();
+        let description = format!("Minecraft P2P Geyser ({room_name})");
+        tokio::spawn(async move {
+            if let Ok(mapping) = crate::network::upnp::UpnpMapping::attempt_map(
+                resolved_bedrock_port, 
+                &description
+            ).await {
+                let mut state = inner_clone.lock().await;
+                state.upnp_mapping = Some(mapping);
+            }
+        });
 
         let mut child = spawn_geyser_process(
             &java_path,
@@ -171,6 +184,7 @@ impl GeyserManager {
         let child = {
             let mut state = self.inner.lock().await;
             state.info.running = false;
+            let _ = state.upnp_mapping.take();
             state.child.take()
         };
 
@@ -229,11 +243,15 @@ fn resolve_runtime_dir() -> Result<PathBuf> {
     Ok(std::env::temp_dir().join("MinecraftP2PConnector").join("geyser"))
 }
 
-fn resolve_source_jar() -> Result<PathBuf> {
+fn resolve_source_jar(app: &AppHandle) -> Result<PathBuf> {
     let mut candidates = Vec::new();
 
     if let Some(explicit) = std::env::var_os("MC_GEYSER_JAR") {
         candidates.push(PathBuf::from(explicit));
+    }
+
+    if let Ok(path) = app.path().resolve("resources/geyser/Geyser-Standalone.jar", tauri::path::BaseDirectory::Resource) {
+        candidates.push(path);
     }
 
     if let Ok(exe) = std::env::current_exe() {
@@ -244,34 +262,8 @@ fn resolve_source_jar() -> Result<PathBuf> {
         }
     }
 
-    candidates.push(PathBuf::from(r"G:\oskarlolpo project\minecraftjava\01_Active\p2p\src-tauri\resources\geyser").join(GEYSER_JAR_NAME));
-    candidates.push(
-        PathBuf::from(r"G:\oskarlolpo project\minecraftjava\03_Integrations\Geyser-master\bootstrap\standalone\build\libs")
-            .join(GEYSER_JAR_NAME),
-    );
-
     if let Some(found) = candidates.into_iter().find(|path| path.exists()) {
         return Ok(found);
-    }
-
-    let libs_dir = PathBuf::from(r"G:\oskarlolpo project\minecraftjava\03_Integrations\Geyser-master\bootstrap\standalone\build\libs");
-    if libs_dir.exists() {
-        if let Some(found) = fs::read_dir(&libs_dir)
-            .ok()
-            .into_iter()
-            .flat_map(|entries| entries.filter_map(Result::ok))
-            .map(|entry| entry.path())
-            .find(|path| {
-                path.extension().and_then(|value| value.to_str()) == Some("jar")
-                    && path
-                        .file_name()
-                        .and_then(|value| value.to_str())
-                        .map(|value| value.starts_with("Geyser-Standalone"))
-                        .unwrap_or(false)
-            })
-        {
-            return Ok(found);
-        }
     }
 
     Err(anyhow!(

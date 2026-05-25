@@ -133,6 +133,8 @@ const updateStatusEl = document.querySelector("#update-status");
 const externalHostModeEl = document.querySelector("#external-host-mode");
 const externalHostAddressFieldEl = document.querySelector("#external-host-address-field");
 const externalHostAddressEl = document.querySelector("#external-host-address");
+const hostProgressContainerEl = document.querySelector("#host-progress-container");
+const hostProgressTextEl = document.querySelector("#host-progress-text");
 
 const playerModalEl = document.querySelector("#player-modal");
 const closePlayerModalEl = document.querySelector("#close-player-modal");
@@ -356,7 +358,7 @@ function applyTranslations() {
   document.title = t("appTitle");
   document.querySelectorAll("[data-i18n]").forEach((element) => {
     const key = element.dataset.i18n;
-    if (key) element.textContent = t(key);
+    if (key) element.innerHTML = t(key);
   });
   document.querySelectorAll("[data-i18n-placeholder]").forEach((element) => {
     const key = element.dataset.i18nPlaceholder;
@@ -775,6 +777,7 @@ function openModal() {
 function closeModal() {
   modalEl.classList.add("hidden");
   modalEl.setAttribute("aria-hidden", "true");
+  if (hostProgressContainerEl) hostProgressContainerEl.classList.add("hidden");
 }
 
 function canOpenHostModal() {
@@ -811,6 +814,18 @@ function formatTransportLabel(transport) {
   if (transport === "direct-hole-punch") return "DCUtR hole punch";
   if (transport === "direct" || transport === "direct-quic") return "Direct libp2p";
   return transport ?? "unknown transport";
+}
+
+function getTransportIcon(transport) {
+  if (transport === "direct" || transport === "direct-quic" || transport === "direct-hole-punch") {
+    // Lightning icon for direct
+    return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" title="${escapeHtml(formatTransportLabel(transport))}"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>`;
+  }
+  if (transport === "relay-circuit" || transport === "relay-reservation") {
+    // Cloud icon for relay
+    return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" title="${escapeHtml(formatTransportLabel(transport))}"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path></svg>`;
+  }
+  return '';
 }
 
 function buildPeerSummaryLines(peer, profile = null) {
@@ -1244,6 +1259,9 @@ function renderPeers(peers) {
     const avatarChar = name.slice(0, 1).toUpperCase();
     const ping = peer.pingMs == null ? "n/a" : `${peer.pingMs} ms`;
     const pingClass = peer.pingMs > 200 ? "danger" : peer.pingMs > 100 ? "warning" : "";
+    const transportIcon = peer.transport && !peer.inferred 
+        ? `<span class="transport-icon" style="margin-right: 4px; display: inline-flex; vertical-align: text-bottom; opacity: 0.7;">${getTransportIcon(peer.transport)}</span>`
+        : "";
 
     // Track ping for graph
     if (peer.peerId && peer.pingMs != null) {
@@ -1261,7 +1279,7 @@ function renderPeers(peers) {
             <strong>${parseMinecraftColors(name)}</strong>
           </div>
           <div class="player-meta">
-            <span>${parseMinecraftColors(mcNick)}</span>
+            ${transportIcon}<span>${parseMinecraftColors(mcNick)}</span>
             <span class="ping-tag ${pingClass}">${ping}</span>
           </div>
         </div>
@@ -2088,7 +2106,7 @@ async function startHosting() {
   hostButtonEl.innerHTML = `<svg class="animate-spin" style="animation: spin 1s linear infinite;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg> <span>Запуск...</span>`;
   hostButtonEl.classList.add('loading-opacity');
 
-  await detectMinecraftNickname();
+  detectMinecraftNickname().catch(console.error);
   await autofillRoomNameFromLocalServer();
   const roomName = roomNameEl.value.trim();
   const roomThemeInput = document.getElementById("room-theme");
@@ -2099,6 +2117,7 @@ async function startHosting() {
     hostButtonEl.disabled = false;
     hostButtonEl.innerHTML = originalHostText;
     hostButtonEl.classList.remove('loading-opacity');
+    if (hostProgressContainerEl) hostProgressContainerEl.classList.add("hidden");
     return;
   }
 
@@ -2124,6 +2143,8 @@ async function startHosting() {
   setMinecraftHint(t("hintWaiting"), false);
 
   try {
+    if (hostProgressContainerEl) hostProgressContainerEl.classList.remove("hidden");
+    
     const preflight = await runPreflightCheck({ silent: false });
     if (!preflight.reachable) {
       addLog("Warning: local Minecraft server not detected at 127.0.0.1:" + localPort + ". Attempting to start anyway...");
@@ -2141,6 +2162,11 @@ async function startHosting() {
       22000,
     );
     renderStatus(status);
+    
+    if (status.state === "error") {
+       throw new Error(status.lastError || "Unknown error during host startup");
+    }
+    
     hostSession.active = true;
     hostSession.roomName = roomName;
     hostSession.hasPassword = Boolean(password);
@@ -2196,6 +2222,9 @@ async function startHosting() {
     syncButtons();
     hostButtonEl.disabled = false;
     hostButtonEl.classList.remove('loading-opacity');
+    if (hostProgressContainerEl) hostProgressContainerEl.classList.add("hidden");
+    
+    closeModal();
   }
 }
 
@@ -2234,29 +2263,12 @@ async function stopSession() {
 }
 
 async function connectToServer(server) {
-  await detectMinecraftNickname();
-  if (server.external) {
-    const externalJoin = server.joinAddress ?? (server.peerAddr ? toSocketEndpoint(server.peerAddr) ?? server.peerAddr : null);
-    if (externalJoin) {
-      await copyTextToClipboard(externalJoin);
-      state.pendingConnects.add(server.clientId);
-      renderServers();
-      addLog(t("copiedIp"));
-      setMinecraftHint(`${t("selectedAddressLabel")}: ${externalJoin}`, true);
-      setTimeout(() => {
-        state.pendingConnects.delete(server.clientId);
-        renderServers();
-      }, 1400);
-    }
-    return;
-  }
-
-  if (server.clientId === localClientId) {
-    addLog(t("ownHostBlocked"));
-    return;
-  }
   if (state.pendingConnects.has(server.clientId)) {
     addLog(t("repeatConnectBlocked"));
+    return;
+  }
+  if (server.clientId === localClientId) {
+    addLog(t("ownHostBlocked"));
     return;
   }
   if (isClientLocked()) {
@@ -2264,8 +2276,30 @@ async function connectToServer(server) {
     return;
   }
 
-  state.selectedServerId = server.clientId;
+  // Mark as pending synchronously to prevent double clicks
   state.pendingConnects.add(server.clientId);
+  renderServers();
+
+  await detectMinecraftNickname();
+  
+  if (server.external) {
+    const externalJoin = server.joinAddress ?? (server.peerAddr ? toSocketEndpoint(server.peerAddr) ?? server.peerAddr : null);
+    if (externalJoin) {
+      await copyTextToClipboard(externalJoin);
+      addLog(t("copiedIp"));
+      setMinecraftHint(`${t("selectedAddressLabel")}: ${externalJoin}`, true);
+      setTimeout(() => {
+        state.pendingConnects.delete(server.clientId);
+        renderServers();
+      }, 1400);
+    } else {
+      state.pendingConnects.delete(server.clientId);
+      renderServers();
+    }
+    return;
+  }
+
+  state.selectedServerId = server.clientId;
   state.tunnelReady = false;
   setMinecraftHint(t("hintConnecting"), false);
   renderServers();
