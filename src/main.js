@@ -1725,7 +1725,7 @@ function buildPresencePayload(status) {
   const maxPlayers = Math.max(online, hostSession.maxPlayers ?? 30);
   return {
     room_name: hostSession.roomName,
-    host_name: state.profile.nickname,
+    host_name: state.profile.nickname !== "Player" ? state.profile.nickname : (state.detectedMinecraftNickname ?? state.profile.nickname),
     minecraft_nickname: state.detectedMinecraftNickname ?? null,
     launcher: state.runtimeFingerprint?.launcher ?? null,
     client_minecraft_version: state.runtimeFingerprint?.minecraftVersion ?? null,
@@ -2510,10 +2510,12 @@ await listen("peer-health", async (event) => {
   peerLastBytes[pId] = { rx: bytesRx || 0, tx: bytesTx || 0 };
 
   if (state.status && state.status.peers) {
-    const peer = state.status.peers.find(p => p.peer_id === pId);
+    const peer = state.status.peers.find(p => p.peerId === pId || p.peer_id === pId);
     if (peer) {
-      peer.ping_ms = pPing;
+      peer.pingMs = pPing;
+      peer.ping_ms = pPing; // just in case
       renderPeers(state.status.peers);
+      renderSessionCard();
     }
   }
 });
