@@ -806,6 +806,7 @@ body[data-theme="white"] .nav-button img {
 
 .ping-tag.warning { color: var(--accent-yellow); border-color: rgba(245, 200, 20, 0.3); }
 .ping-tag.danger { color: var(--accent-red); border-color: rgba(239, 86, 111, 0.3); }
+.ping-tag.unknown { color: var(--text-soft); border-color: color-mix(in srgb, var(--line) 50%, transparent); }
 
 .player-actions {
   display: flex;

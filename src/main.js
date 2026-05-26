@@ -1050,8 +1050,8 @@ function renderSelectedServer() {
     (selected?.peerAddr ? toSocketEndpoint(selected.peerAddr) ?? selected.peerAddr : null);
   
   if (selectedServerEl) selectedServerEl.textContent = selected ? selected.roomName : t("noSelection");
-  if (selectedEndpointEl) selectedEndpointEl.textContent = javaEndpoint ?? "n/a";
-  if (selectedBedrockEndpointEl) selectedBedrockEndpointEl.textContent = bedrockEndpoint ?? "n/a";
+  if (selectedEndpointEl) selectedEndpointEl.textContent = javaEndpoint ?? "—";
+  if (selectedBedrockEndpointEl) selectedBedrockEndpointEl.textContent = bedrockEndpoint ?? "—";
   if (selectedMetaEl) {
     selectedMetaEl.textContent = selected
       ? t("selectedMetaTemplate", {
@@ -1146,17 +1146,25 @@ function renderSessionCard() {
     
     if (isReady) {
       activeHostCardEl.innerHTML = `
-      <div class="active-host-layout" style="background: rgba(0, 255, 0, 0.1); border: 1px solid var(--accent); padding: 16px; border-radius: 8px;">
-        <div class="host-avatar" style="background: var(--accent); color: white;">✅</div>
-        <div class="host-details">
-          <h3 style="margin-top: 0; color: var(--accent);">Вы успешно подключены к другу!</h3>
-          <p style="margin-bottom: 12px;">Заходите в Minecraft и подключайтесь по этому адресу:</p>
-          <div class="ip-box" style="display: flex; gap: 8px; align-items: center; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px;">
-              <strong style="font-size: 1.2em; font-family: monospace; user-select: all;">127.0.0.1:25565</strong>
-              <button onclick="copyTextToClipboard('127.0.0.1:25565')" class="ghost-button">📋 Копировать</button>
+      <div class="active-host-layout success-layout" style="background: color-mix(in srgb, var(--success) 4%, var(--surface)); border: 1px solid color-mix(in srgb, var(--success) 20%, var(--line)); padding: 20px; border-radius: var(--radius-lg); display: flex; gap: 16px; align-items: flex-start;">
+        <div class="host-avatar" style="background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--success); border: 1px solid color-mix(in srgb, var(--success) 25%, transparent); flex-shrink: 0; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-sm);">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        </div>
+        <div class="host-details" style="flex: 1;">
+          <h3 style="margin: 0 0 8px 0; color: var(--success); font-size: 18px; font-weight: 600;">Вы успешно подключены к другу!</h3>
+          <p style="margin: 0 0 16px 0; color: var(--text-soft); font-size: 14px; line-height: 1.5;">Заходите в Minecraft и подключайтесь по этому адресу:</p>
+          <div class="ip-box" style="display: inline-flex; gap: 12px; align-items: center; background: var(--surface-raised); border: 1px solid var(--line); padding: 8px 12px; border-radius: var(--radius-sm); box-shadow: 0 2px 8px rgba(0,0,0,0.2);">
+              <strong style="font-size: 1.1em; font-family: monospace; user-select: all; color: var(--text-base); letter-spacing: 0.5px;">127.0.0.1:25565</strong>
+              <button onclick="copyTextToClipboard('127.0.0.1:25565')" class="ghost-button" style="padding: 6px 12px; font-size: 13px; height: auto; min-height: 0; margin-left: 8px; display: inline-flex; align-items: center; gap: 6px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                Копировать
+              </button>
           </div>
-          <div class="host-meta-row" style="margin-top: 12px;">
-            <span class="host-meta-pill">${escapeHtml(status?.peers?.[0]?.pingMs == null ? "Ping: n/a" : `Ping: ${status.peers[0].pingMs} ms`)}</span>
+          <div class="host-meta-row" style="margin-top: 16px;">
+            <span class="host-meta-pill" style="background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--success); border-color: color-mix(in srgb, var(--success) 20%, transparent); display: inline-flex; align-items: center; gap: 4px;">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+              ${escapeHtml(status?.peers?.[0]?.pingMs == null ? "Пинг: --" : `Пинг: ${status.peers[0].pingMs} ms`)}
+            </span>
           </div>
         </div>
       </div>
@@ -1167,10 +1175,10 @@ function renderSessionCard() {
         <div class="host-avatar">⇄</div>
         <div class="host-details">
           <h3>${escapeHtml(t("clientCardTitle"))}</h3>
-            <p>${escapeHtml(t("clientCardDescription", { peer: status?.peers?.[0]?.addr ?? "n/a" }))}</p>
+            <p>${escapeHtml(t("clientCardDescription", { peer: status?.peers?.[0]?.addr ?? "Установка соединения..." }))}</p>
             <div class="host-meta-row">
               <span class="host-meta-pill">${escapeHtml(t("clientCardReady"))}</span>
-              <span class="host-meta-pill">${escapeHtml(status?.peers?.[0]?.pingMs == null ? "Ping: n/a" : `Ping: ${status.peers[0].pingMs} ms`)}</span>
+              <span class="host-meta-pill">${escapeHtml(status?.peers?.[0]?.pingMs == null ? "Пинг: --" : `Пинг: ${status.peers[0].pingMs} ms`)}</span>
             </div>
           </div>
         </div>
@@ -1255,10 +1263,10 @@ function renderPeers(peers) {
   [...peers, ...inferredPlayers].forEach((peer) => {
     const profile = state.peerProfiles.get(peer.peerId) ?? null;
     const name = peer.inferredName || profile?.nickname || peer.peerId;
-    const mcNick = profile?.minecraftNickname || peer.inferredName || "n/a";
+    const mcNick = profile?.minecraftNickname || peer.inferredName || "Неизвестный ник";
     const avatarChar = name.slice(0, 1).toUpperCase();
-    const ping = peer.pingMs == null ? "n/a" : `${peer.pingMs} ms`;
-    const pingClass = peer.pingMs > 200 ? "danger" : peer.pingMs > 100 ? "warning" : "";
+    const ping = peer.pingMs == null ? "Пинг: --" : `${peer.pingMs} ms`;
+    const pingClass = peer.pingMs == null ? "unknown" : peer.pingMs > 200 ? "danger" : peer.pingMs > 100 ? "warning" : "";
     const transportIcon = peer.transport && !peer.inferred 
         ? `<span class="transport-icon" style="margin-right: 4px; display: inline-flex; vertical-align: text-bottom; opacity: 0.7;">${getTransportIcon(peer.transport)}</span>`
         : "";
@@ -1279,7 +1287,7 @@ function renderPeers(peers) {
             <strong>${parseMinecraftColors(name)}</strong>
           </div>
           <div class="player-meta">
-            ${transportIcon}<span>${parseMinecraftColors(mcNick)}</span>
+            ${transportIcon}<span style="color: var(--text-soft);">${parseMinecraftColors(mcNick)}</span>
             <span class="ping-tag ${pingClass}">${ping}</span>
           </div>
         </div>
@@ -1318,7 +1326,7 @@ function openPlayerModal(peerId) {
   loaderEl.className = (loader === "—" || loader.toLowerCase() === "unknown") ? "loader-unknown" : "";
 
   const pingEl = document.querySelector("#player-modal-ping");
-  pingEl.textContent = isHost ? "0 ms" : (peer?.pingMs == null ? "n/a" : `${peer.pingMs} ms`);
+  pingEl.textContent = isHost ? "0 ms" : (peer?.pingMs == null ? "—" : `${peer.pingMs} ms`);
 
   kickButtonEl.classList.toggle("hidden", isHost || !state.status || state.status.mode !== "host" || (peer && peer.inferred));
   
