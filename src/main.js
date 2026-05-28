@@ -2143,8 +2143,11 @@ async function probeEmbeddedTestServer() {
   }
 }
 
+let isStartingSession = false;
 async function startHosting() {
+  if (isStartingSession) return;
   if (!canOpenHostModal()) return;
+  isStartingSession = true;
   const originalHostText = hostButtonEl.innerHTML;
   hostButtonEl.disabled = true;
   hostButtonEl.innerHTML = `<svg class="animate-spin" style="animation: spin 1s linear infinite;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg> <span>Запуск...</span>`;
@@ -2164,6 +2167,7 @@ async function startHosting() {
     hostButtonEl.innerHTML = originalHostText;
     hostButtonEl.classList.remove('loading-opacity');
     if (hostProgressContainerEl) hostProgressContainerEl.classList.add("hidden");
+    isStartingSession = false;
     return;
   }
 
@@ -2266,6 +2270,7 @@ async function startHosting() {
     hostButtonEl.classList.remove('loading-opacity');
     addLog(t("hostStartFailed", { error: String(error) }));
   } finally {
+    isStartingSession = false;
     syncButtons();
     hostButtonEl.disabled = false;
     hostButtonEl.classList.remove('loading-opacity');

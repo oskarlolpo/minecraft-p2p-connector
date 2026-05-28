@@ -398,19 +398,25 @@ impl NetworkManager {
 
         let (udp_socket, punch_socket, udp_bind_addr) = Self::bind_shared_udp_socket()?;
 
-        let version_fut = minecraft::detect_local_version(local_port);
+        let version_fut = async {
+            if minecraft_version.as_deref() == Some("Bedrock Edition") {
+                Ok("Bedrock Edition".to_string())
+            } else {
+                minecraft::detect_local_version(local_port).await
+            }
+        };
         let stun_fut = discover_public_addr(punch_socket.clone(), &self.inner.stun);
         
         let (version_res, public_udp_addr_res) = tokio::join!(version_fut, stun_fut);
 
-        let minecraft_version = match version_res {
+        let final_version = match version_res {
             Ok(version) => Some(version),
             Err(error) => {
                 self.push_log(format!(
                     "Failed to detect Minecraft version on 127.0.0.1:{local_port}: {error:#}"
                 ))
                 .await;
-                None
+                minecraft_version.clone()
             }
         };
 
@@ -438,12 +444,12 @@ impl NetworkManager {
             udp_bind_addr: Some(udp_bind_addr.to_string()),
             public_udp_addr: public_udp_addr_str.clone(),
             local_game_port: Some(local_port),
-            minecraft_version: minecraft_version.clone(),
+            minecraft_version: final_version.clone(),
             password_protected: has_password,
             signaling_server: ABLY_SIGNAL_LABEL.into(),
             note: Some(format!(
                 "Host active. Room: {room_name}. Local port: {local_port}. Version: {}.",
-                minecraft_version
+                final_version
                     .clone()
                     .unwrap_or_else(|| "Unknown".into())
             )),
