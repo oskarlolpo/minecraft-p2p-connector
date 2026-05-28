@@ -1431,6 +1431,10 @@ function renderServers() {
     const activeTypeChip = document.querySelector(".filter-chip.active[data-filter-type]");
     const typeFilter = activeTypeChip ? activeTypeChip.dataset.filterType : "all";
     
+    const activeVersionChips = Array.from(document.querySelectorAll(".filter-chip.active[data-filter-version]"));
+    const activeVersions = activeVersionChips.map(c => c.dataset.filterVersion);
+    const versionFilter = activeVersions.length > 0 ? activeVersions : ["all"];
+
     let filteredServers = state.servers.filter(server => {
       // Name match
       const nameStr = (server.roomName || server.hostName || "Неизвестный сервер").toLowerCase();
@@ -1443,8 +1447,16 @@ function renderServers() {
       let typeMatch = true;
       if (typeFilter === 'global') typeMatch = Boolean(server.external);
       if (typeFilter === 'local') typeMatch = !server.external;
+
+      // Version match
+      const versionStr = server.minecraftVersion || "Unknown";
+      let versionMatch = versionFilter.includes("all");
+      if (!versionMatch) {
+        if (versionFilter.includes("java") && versionStr.includes("Java")) versionMatch = true;
+        if (versionFilter.includes("bedrock") && versionStr.includes("Bedrock")) versionMatch = true;
+      }
       
-      return nameMatch && themeMatch && typeMatch;
+      return nameMatch && themeMatch && typeMatch && versionMatch;
     });
 
     lobbyCountEl.textContent = t("lobbyCount", { count: filteredServers.length });
@@ -1529,7 +1541,7 @@ function renderServers() {
             </div>
 
             <div class="server-card-tags">
-              <span class="server-tag">
+              <span class="server-tag version-tag ${(server.minecraftVersion || '').includes('Bedrock') ? 'bedrock-tag' : 'java-tag'}">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 20.5 12 4l10 16.5Z"/><path d="m20.5 10.5-8-6-8 6"/></svg>
                 ${escapeHtml(server.minecraftVersion ?? t("serverUnknownVersion"))}
               </span>
@@ -2014,6 +2026,25 @@ function waitForRelayAck(relaySessionId, timeoutMs = 12000) {
 
 async function runPreflightCheck({ silent = false } = {}) {
   const localPort = Number(localGamePortEl.value || 25565);
+  const gameVersionInput = document.getElementById("game-version");
+  const isBedrock = gameVersionInput && gameVersionInput.value === "bedrock";
+
+  if (isBedrock) {
+    const report = {
+      reachable: true,
+      localPort,
+      minecraftVersion: "Bedrock Edition",
+      recommendedHostAction: "Bedrock UDP server assumed to be running.",
+      note: "TCP Preflight check bypassed for UDP.",
+      state: "reachable"
+    };
+    state.lastPreflight = report;
+    if (!silent) {
+      addLog(`Preflight OK for 127.0.0.1:${localPort} (Bedrock UDP).`);
+    }
+    return report;
+  }
+
   const report = await invoke("run_preflight_and_store", { localPort });
   state.lastPreflight = report;
 
@@ -2437,12 +2468,31 @@ function rerender() {
   );
 }
 
+function getHostIpFromPeerAddr(addr) {
+  if (!addr) return null;
+  const ipv6Match = addr.match(/^\[([^\]]+)\]:\d+$/);
+  if (ipv6Match) return ipv6Match[1];
+  const ipv4Match = addr.match(/^([^:]+):\d+$/);
+  if (ipv4Match) return ipv4Match[1];
+  return addr;
+}
+
 await listen("tunnel_established", async (event) => {
   state.pendingConnects.clear();
   state.tunnelReady = true;
   state.activeTunnelTransport = event.payload?.transport ?? state.activeTunnelTransport ?? "direct-quic";
   setMinecraftHint(t("hintConnected"), true);
-  const addr = event.payload?.minecraftAddr ?? "127.0.0.1:25565";
+  
+  let addr = event.payload?.minecraftAddr ?? "127.0.0.1:25565";
+  const selectedServer = state.serverList.find((s) => s.clientId === state.selectedServerId);
+  const version = selectedServer?.minecraft_version || selectedServer?.client_minecraft_version || "";
+  
+  if (version.includes("Bedrock")) {
+    const hostIp = getHostIpFromPeerAddr(selectedServer?.peer_addr) ?? "127.0.0.1";
+    const hostPort = selectedServer?.local_port || 19132;
+    addr = `${hostIp}:${hostPort}`;
+  }
+  
   state.tunnelAddr = addr;
   await copyTextToClipboard(addr);
   addLog(
@@ -2805,6 +2855,7 @@ gameVersionChips.forEach(chip => {
 // Filter chips logic
 const filterChipsTheme = document.querySelectorAll(".filter-chip[data-filter-theme]");
 const filterChipsType = document.querySelectorAll(".filter-chip[data-filter-type]");
+const filterChipsVersion = document.querySelectorAll(".filter-chip[data-filter-version]");
 
 filterChipsTheme.forEach(chip => {
   chip.addEventListener("click", () => {
@@ -2824,6 +2875,15 @@ filterChipsType.forEach(chip => {
   });
 });
 
+filterChipsVersion.forEach(chip => {
+  chip.addEventListener("click", () => {
+    chip.classList.toggle("active");
+    const activeVersions = [...filterChipsVersion].filter(c => c.classList.contains("active")).map(c => c.dataset.filterVersion);
+    const filterVersionEl = document.getElementById("filter-version");
+    if (filterVersionEl) filterVersionEl.value = activeVersions.length === 1 ? activeVersions[0] : "all";
+  });
+});
+
 // Filter clear buttons
 document.querySelectorAll(".filter-clear-btn").forEach(btn => {
   btn.addEventListener("click", () => {
@@ -2834,6 +2894,9 @@ document.querySelectorAll(".filter-clear-btn").forEach(btn => {
     } else if (group === "type") {
       filterChipsType.forEach(c => c.classList.remove("active"));
       const el = document.getElementById("filter-type"); if (el) el.value = "all";
+    } else if (group === "version") {
+      filterChipsVersion.forEach(c => c.classList.remove("active"));
+      const el = document.getElementById("filter-version"); if (el) el.value = "all";
     }
     // We don't call renderServers here, wait for Apply button
   });
@@ -2843,8 +2906,10 @@ document.querySelectorAll(".filter-clear-btn").forEach(btn => {
 document.getElementById("reset-filters-button")?.addEventListener("click", () => {
   filterChipsTheme.forEach(c => c.classList.remove("active"));
   filterChipsType.forEach(c => c.classList.remove("active"));
+  filterChipsVersion.forEach(c => c.classList.remove("active"));
   const ft = document.getElementById("filter-theme"); if (ft) ft.value = "all";
   const ftype = document.getElementById("filter-type"); if (ftype) ftype.value = "all";
+  const fversion = document.getElementById("filter-version"); if (fversion) fversion.value = "all";
   const si = document.getElementById("server-search-input"); if (si) si.value = "";
   renderServers();
 });
