@@ -405,8 +405,18 @@ impl NetworkManager {
                 minecraft::detect_local_version(local_port).await
             }
         };
-        let stun_fut = discover_public_addr(punch_socket.clone(), &self.inner.stun);
-        
+        // Hard 8-second ceiling on STUN so blocked-UDP setups don't hang forever
+        let stun_fut = async {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(8),
+                discover_public_addr(punch_socket.clone(), &self.inner.stun),
+            ).await {
+                Ok(result) => result,
+                Err(_) => Err(anyhow::anyhow!("STUN discovery timed out after 8s (UDP may be blocked)"))
+            }
+        };
+
+        self.push_log(format!("Starting QUIC endpoint, detecting public address…")).await;
         let (version_res, public_udp_addr_res) = tokio::join!(version_fut, stun_fut);
 
         let final_version = match version_res {
@@ -421,9 +431,12 @@ impl NetworkManager {
         };
 
         let public_udp_addr_str = match &public_udp_addr_res {
-            Ok(addr) => Some(addr.to_string()),
+            Ok(addr) => {
+                self.push_log(format!("Public UDP address: {addr}")).await;
+                Some(addr.to_string())
+            },
             Err(e) => {
-                self.push_log(format!("STUN discovery failed, proceeding in Relay mode: {e:#}")).await;
+                self.push_log(format!("STUN failed (UDP likely blocked), using Relay mode: {e:#}")).await;
                 None
             }
         };
