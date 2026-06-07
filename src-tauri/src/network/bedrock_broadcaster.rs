@@ -15,6 +15,9 @@ pub struct BedrockBroadcaster {
 impl BedrockBroadcaster {
     pub async fn start(
         room_name: String,
+        host_name: String,
+        mc_version: String,
+        slots: String,
         proxy_port: u16,
         cancel: CancellationToken,
     ) -> Result<Self> {
@@ -29,6 +32,13 @@ impl BedrockBroadcaster {
 
         let local_addr = socket.local_addr()?;
         info!("Bedrock LAN Broadcaster started on {}", local_addr);
+
+        let parts: Vec<&str> = slots.split('/').collect();
+        let (players, max_players) = if parts.len() == 2 {
+            (parts[0].to_string(), parts[1].to_string())
+        } else {
+            ("0".to_string(), "30".to_string())
+        };
 
         let task = tokio::spawn(async move {
             let mut buf = [0u8; 1024];
@@ -53,8 +63,8 @@ impl BedrockBroadcaster {
                                     // MOTD
                                     // MCPE;Server Name;ProtocolVersion;VersionString;Online;Max;ServerUID;SecondLine;GameMode;GameModeNumeric;Portv4;Portv6;
                                     let motd = format!(
-                                        "MCPE;{};776;1.21.51;0;30;1234567890;P2P Connector;Survival;1;{};19133;",
-                                        room_name, proxy_port
+                                        "MCPE;{};776;{};{};{};1234567890;{};Survival;1;{};19133;",
+                                        room_name, mc_version, players, max_players, host_name, proxy_port
                                     );
                                     
                                     pong.extend_from_slice(&(motd.len() as u16).to_be_bytes());

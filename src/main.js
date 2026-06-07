@@ -1657,6 +1657,7 @@ function hydrateServers(members) {
         launcher: data.launcher ?? null,
         minecraftVersionRuntime: data.client_minecraft_version ?? null,
         modLoader: data.mod_loader ?? null,
+        relay_session_id: data.relay_session_id ?? null,
         external: false,
       };
     })
@@ -1763,7 +1764,7 @@ function buildPresencePayload(status) {
     minecraft_nickname: state.detectedMinecraftNickname ?? null,
     launcher: state.runtimeFingerprint?.launcher ?? null,
     client_minecraft_version: state.runtimeFingerprint?.minecraftVersion ?? null,
-    mod_loader: state.runtimeFingerprint?.modLoader ?? null,
+    mod_loader: state.runtimeFingerprint?.mod_loader ?? null,
     slots: `${online}/${maxPlayers}`,
     has_password: hostSession.hasPassword,
     peer_id: hostSession.peerId ?? localClientId,
@@ -1779,6 +1780,7 @@ function buildPresencePayload(status) {
     geyser_enabled: Boolean(status?.geyserEnabled),
     bedrock_port: status?.bedrockPort ?? null,
     bedrock_endpoint: deriveBedrockEndpoint(socketEndpoint, status?.bedrockPort ?? null),
+    relay_session_id: hostSession.relay_session_id ?? null,
   };
 }
 
@@ -1891,31 +1893,56 @@ async function bindChannelHandlers() {
 
   if (!state.privateChannel.__mcp2pHandshakeBound) {
     await state.privateChannel.subscribe("connect-request", async (message) => {
-      const peerAddr = message.data?.peer_addr;
-      const requester = message.data?.client_id ?? message.clientId ?? "unknown";
-      const nickname = message.data?.nickname ?? requester;
-      const minecraftNickname = message.data?.minecraft_nickname ?? null;
-      const launcher = message.data?.launcher ?? null;
-      const minecraftVersion = message.data?.client_minecraft_version ?? null;
-      const modLoader = message.data?.mod_loader ?? null;
-      const relaySessionId = message.data?.relay_session_id ?? null;
+      let data = message.data;
+      if (typeof data === "string") {
+        try {
+          data = JSON.parse(data);
+        } catch (e) {}
+      }
+      const peerAddr = data?.peer_addr;
+      const requester = data?.client_id ?? message.clientId ?? "unknown";
+      const nickname = data?.nickname ?? requester;
+      const minecraftNickname = data?.minecraft_nickname ?? null;
+      const launcher = data?.launcher ?? null;
+      const minecraftVersion = data?.client_minecraft_version ?? null;
+      const modLoader = data?.mod_loader ?? null;
+      const relaySessionId = data?.relay_session_id ?? null;
       state.peerProfiles.set(requester, { nickname, minecraftNickname, launcher, minecraftVersion, modLoader });
       addLog(t("incomingHandshake", { peer: requester, addr: peerAddr ?? "n/a" }));
-      if (!peerAddr) return;
+
+      // Проверяем, является ли адрес реальным (не пустой и не 0.0.0.0)
+      const isRealAddr = peerAddr && !peerAddr.startsWith("0.0.0.0") && peerAddr !== "";
 
       try {
-        await invoke("connect_to_peer", {
-          peerId: requester,
-          peerAddrs: [peerAddr],
-          relaySessionId,
-        });
-        addLog(t("hostPunchSent", { addr: peerAddr }));
+        if (isRealAddr) {
+          // Режим UDP punch + relay: у клиента есть реальный публичный адрес
+          await invoke("connect_to_peer", {
+            peerId: requester,
+            peerAddrs: [peerAddr],
+            relaySessionId,
+          });
+          addLog(t("hostPunchSent", { addr: peerAddr }));
+        } else if (relaySessionId) {
+          // Relay-only режим: клиент за симметричным NAT или Bedrock-клиент
+          // Запускаем только relay-сессию без UDP punch
+          addLog(`Relay-only connect from ${requester} (addr=${peerAddr ?? "none"}), session=${relaySessionId}`);
+          await invoke("connect_to_peer", {
+            peerId: requester,
+            peerAddrs: ["0.0.0.0:0"],
+            relaySessionId,
+          });
+        } else {
+          // Нет ни адреса, ни relay — отклоняем
+          addLog(`Rejected connect-request from ${requester}: no addr and no relay session`);
+          return;
+        }
+
         await state.realtime.channels.get(`lobby:${requester}`).publish("connect-ack", {
           relay_session_id: relaySessionId,
           host_id: localClientId,
         });
       } catch (error) {
-        addLog(`Punch error: ${String(error)}`);
+        addLog(`Punch/relay error for ${requester}: ${String(error)}`);
         await state.realtime.channels.get(`lobby:${requester}`).publish("connect-reject", {
           relay_session_id: relaySessionId,
           host_id: localClientId,
@@ -1924,14 +1951,26 @@ async function bindChannelHandlers() {
       }
     });
     await state.privateChannel.subscribe("connect-ack", (message) => {
-      const relaySessionId = message.data?.relay_session_id ?? null;
+      let data = message.data;
+      if (typeof data === "string") {
+        try {
+          data = JSON.parse(data);
+        } catch (e) {}
+      }
+      const relaySessionId = data?.relay_session_id ?? null;
       if (!relaySessionId) return;
-      state.pendingRelayAcks.get(relaySessionId)?.resolve(message.data ?? null);
+      state.pendingRelayAcks.get(relaySessionId)?.resolve(data ?? null);
     });
     await state.privateChannel.subscribe("connect-reject", (message) => {
-      const relaySessionId = message.data?.relay_session_id ?? null;
+      let data = message.data;
+      if (typeof data === "string") {
+        try {
+          data = JSON.parse(data);
+        } catch (e) {}
+      }
+      const relaySessionId = data?.relay_session_id ?? null;
       if (!relaySessionId) return;
-      const error = message.data?.error ? new Error(String(message.data.error)) : new Error("relay connect rejected by host");
+      const error = data?.error ? new Error(String(data.error)) : new Error("relay connect rejected by host");
       state.pendingRelayAcks.get(relaySessionId)?.reject(error);
     });
     state.privateChannel.__mcp2pHandshakeBound = true;
@@ -2171,50 +2210,48 @@ async function startHosting() {
   if (!canOpenHostModal()) return;
   isStartingSession = true;
   const originalHostText = hostButtonEl.innerHTML;
-  hostButtonEl.disabled = true;
-  hostButtonEl.innerHTML = `<svg class="animate-spin" style="animation: spin 1s linear infinite;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg> <span>Запуск...</span>`;
-  hostButtonEl.classList.add('loading-opacity');
 
-  detectMinecraftNickname().catch(console.error);
-  await autofillRoomNameFromLocalServer();
-  const roomName = roomNameEl.value.trim();
-  const roomThemeInput = document.getElementById("room-theme");
-  const theme = roomThemeInput ? roomThemeInput.value : "other";
-  const gameVersionInput = document.getElementById("game-version");
-  const gameVersion = gameVersionInput && gameVersionInput.value === "bedrock" ? "Bedrock Edition" : "Java Edition";
-  
-  if (!roomName) {
-    roomNameEl.focus();
-    hostButtonEl.disabled = false;
-    hostButtonEl.innerHTML = originalHostText;
-    hostButtonEl.classList.remove('loading-opacity');
-    if (hostProgressContainerEl) hostProgressContainerEl.classList.add("hidden");
-    isStartingSession = false;
-    return;
-  }
+  try {
+    hostButtonEl.disabled = true;
+    hostButtonEl.innerHTML = `<svg class="animate-spin" style="animation: spin 1s linear infinite;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg> <span>Запуск...</span>`;
+    hostButtonEl.classList.add('loading-opacity');
 
-  if (externalHostModeEl.checked) {
-    try {
-      await addExternalServerFromModal(roomName);
-      closeModal();
-    } catch (error) {
-      addLog(t("externalAddFailed", { error: String(error) }));
-    } finally {
+    detectMinecraftNickname().catch(console.error);
+    await autofillRoomNameFromLocalServer();
+    const roomName = roomNameEl.value.trim();
+    const roomThemeInput = document.getElementById("room-theme");
+    const theme = roomThemeInput ? roomThemeInput.value : "other";
+    const gameVersionInput = document.getElementById("game-version");
+    const gameVersion = gameVersionInput && gameVersionInput.value === "bedrock" ? "Bedrock Edition" : "Java Edition";
+    
+    if (!roomName) {
+      roomNameEl.focus();
+      // Reset button but don't close modal
       hostButtonEl.disabled = false;
       hostButtonEl.innerHTML = originalHostText;
       hostButtonEl.classList.remove('loading-opacity');
+      if (hostProgressContainerEl) hostProgressContainerEl.classList.add("hidden");
+      isStartingSession = false;
+      return;
     }
-    return;
-  }
 
-  const localPort = Number(localGamePortEl.value || 25565);
-  const password = requirePasswordEl.checked ? roomPasswordEl.value.trim() || null : null;
-  const enableGeyser = Boolean(enableGeyserEl.checked);
-  const geyserPort = Number(geyserPortEl.value || 19132);
-  state.tunnelReady = false;
-  setMinecraftHint(t("hintWaiting"), false);
+    if (externalHostModeEl.checked) {
+      try {
+        await addExternalServerFromModal(roomName);
+        closeModal();
+      } catch (error) {
+        addLog(t("externalAddFailed", { error: String(error) }));
+      }
+      return;
+    }
 
-  try {
+    const localPort = Number(localGamePortEl.value || 25565);
+    const password = requirePasswordEl.checked ? roomPasswordEl.value.trim() || null : null;
+    const enableGeyser = Boolean(enableGeyserEl.checked);
+    const geyserPort = Number(geyserPortEl.value || 19132);
+    state.tunnelReady = false;
+    setMinecraftHint(t("hintWaiting"), false);
+
     if (hostProgressContainerEl) hostProgressContainerEl.classList.remove("hidden");
     
     const preflight = await runPreflightCheck({ silent: false });
@@ -2244,6 +2281,7 @@ async function startHosting() {
     hostSession.roomName = roomName;
     hostSession.hasPassword = Boolean(password);
     hostSession.peerId = bootstrap.peerId || localClientId;
+    hostSession.relay_session_id = `relay-${crypto.randomUUID()}`;
     hostSession.listenAddrs = collectAdvertisedAddrs(bootstrap, status);
     hostSession.peerAddr = advertisedEndpoint(hostSession.listenAddrs, status.publicUdpAddr ?? status.udpBindAddr);
     hostSession.localPort = localPort;
@@ -2306,17 +2344,17 @@ async function startHosting() {
     }, 2000);
 
   } catch (error) {
-    hostButtonEl.textContent = originalHostText;
-    hostButtonEl.classList.remove('loading-opacity');
     addLog(t("hostStartFailed", { error: String(error) }));
+    closeModal();
   } finally {
     isStartingSession = false;
     syncButtons();
     hostButtonEl.disabled = false;
+    if (!hostButtonEl.textContent.includes('✅')) {
+      hostButtonEl.innerHTML = originalHostText;
+    }
     hostButtonEl.classList.remove('loading-opacity');
     if (hostProgressContainerEl) hostProgressContainerEl.classList.add("hidden");
-    
-    closeModal();
   }
 }
 
@@ -2338,6 +2376,7 @@ async function stopSession() {
     hostSession.roomName = "";
     hostSession.hasPassword = false;
     hostSession.peerId = null;
+    hostSession.relay_session_id = null;
     hostSession.listenAddrs = [];
     hostSession.peerAddr = null;
     hostSession.localPort = 25565;
@@ -2414,6 +2453,10 @@ async function connectToServer(server) {
     await invoke("prepare_client_connect", {
       peerId: server.peerId,
       peerAddrs,
+      roomName: server.roomName || "Unnamed room",
+      hostName: server.hostName || server.clientId,
+      mcVersion: server.minecraftVersion || "Unknown",
+      slots: server.slots || "1/30",
     });
     const status = await waitForStatus(
       (snapshot) =>
@@ -2438,7 +2481,14 @@ async function connectToServer(server) {
     addLog(`Waiting for relay ack ${relaySessionId} from host ${server.clientId}.`);
     await waitForRelayAck(relaySessionId, 12000);
     addLog(`Relay ack received for ${relaySessionId}. Starting client tunnel.`);
-    await invoke("commit_prepared_client_connect", { relaySessionId });
+    // Android hosts (p2pb-*) use UDP/RakNet (Bedrock), pure Bedrock servers also use UDP, Java hosts use TCP
+    const clientSelectedBedrock = document.getElementById("game-version")?.value === "bedrock";
+    const useUdp = Boolean(
+      server.clientId?.startsWith("p2pb-") ||
+      server.minecraftVersion?.includes("Bedrock") ||
+      (server.geyserEnabled ? clientSelectedBedrock : server.bedrockPort !== null)
+    );
+    await invoke("commit_prepared_client_connect", { relaySessionId, useUdp });
   } catch (error) {
     state.pendingConnects.delete(server.clientId);
     setMinecraftHint(t("hintFailed"), false);

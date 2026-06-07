@@ -177,6 +177,10 @@ async fn prepare_client_connect(
     state: State<'_, AppState>,
     peer_id: String,
     peer_addrs: Vec<String>,
+    room_name: Option<String>,
+    host_name: Option<String>,
+    mc_version: Option<String>,
+    slots: Option<String>,
 ) -> Result<(), String> {
     let peer_addr = peer_addrs
         .iter()
@@ -185,7 +189,14 @@ async fn prepare_client_connect(
 
     state
         .manager
-        .prepare_client_connect(peer_addr, (!peer_id.trim().is_empty()).then_some(peer_id))
+        .prepare_client_connect(
+            peer_addr,
+            (!peer_id.trim().is_empty()).then_some(peer_id),
+            room_name,
+            host_name,
+            mc_version,
+            slots,
+        )
         .await
         .map_err(|error| format!("{error:#}"))
 }
@@ -195,10 +206,11 @@ async fn commit_prepared_client_connect(
     app: AppHandle,
     state: State<'_, AppState>,
     relay_session_id: Option<String>,
+    use_udp: Option<bool>,
 ) -> Result<(), String> {
     state
         .manager
-        .commit_prepared_client_connect(app, relay_session_id)
+        .commit_prepared_client_connect(app, relay_session_id, use_udp.unwrap_or(false))
         .await
         .map_err(|error| format!("{error:#}"))
 }

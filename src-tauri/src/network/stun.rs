@@ -13,9 +13,10 @@ const STUN_ATTR_XOR_MAPPED: u16 = 0x0020;
 const STUN_ATTR_MAPPED: u16 = 0x0001;
 
 const STUN_SERVERS: &[&str] = &[
+    "stun.yandex.ru:3478",
+    "stun.sipnet.net:3478",
     "stun.l.google.com:19302",
     "stun1.l.google.com:19302",
-    "stun2.l.google.com:19302",
     "stun.cloudflare.com:3478",
 ];
 

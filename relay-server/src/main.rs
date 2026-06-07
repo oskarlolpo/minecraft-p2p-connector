@@ -149,30 +149,43 @@ async fn handle_connection(
             ws_write.send(Message::Text(ack)).await?;
 
             // Relay loop: forward between host WS ↔ channel
+            let mut ping_interval = tokio::time::interval(Duration::from_secs(20));
+            ping_interval.tick().await; // discard immediate first tick
             loop {
                 tokio::select! {
                     // Messages from host's WebSocket → forward to client
                     msg = ws_read.next() => {
                         let Some(msg) = msg else { break };
                         let msg = msg?;
-                        match &msg {
-                            Message::Binary(_) | Message::Ping(_) => {
-                                // Forward to client if connected
+                        match msg {
+                            Message::Binary(data) => {
+                                // Forward binary data to client
                                 let sessions_read = sessions.read().await;
                                 if let Some(session) = sessions_read.get(&session_id) {
                                     if let Some(client_tx) = &session.client_tx {
-                                        let _ = client_tx.send(msg).await;
+                                        let _ = client_tx.send(Message::Binary(data)).await;
                                     }
                                 }
                             }
+                            Message::Ping(data) => {
+                                // Respond locally, do NOT forward
+                                ws_write.send(Message::Pong(data)).await?;
+                            }
+                            Message::Pong(_) => {} // ignore
                             Message::Close(_) => break,
-                            _ => {} // Text frames after handshake are ignored
+                            _ => {}
                         }
                     }
                     // Messages from channel (sent by client) → forward to host WS
                     msg = rx.recv() => {
                         let Some(msg) = msg else { break };
                         ws_write.send(msg).await?;
+                    }
+                    // Server-side keepalive to prevent NAT timeout (50s issue)
+                    _ = ping_interval.tick() => {
+                        if ws_write.send(Message::Ping(vec![])).await.is_err() {
+                            break;
+                        }
                     }
                 }
             }
@@ -214,16 +227,23 @@ async fn handle_connection(
             ws_write.send(Message::Text(ack)).await?;
 
             // Relay loop: forward between client WS ↔ channel
+            let mut ping_interval = tokio::time::interval(Duration::from_secs(20));
+            ping_interval.tick().await; // discard immediate first tick
             loop {
                 tokio::select! {
                     // Messages from client's WebSocket → forward to host
                     msg = ws_read.next() => {
                         let Some(msg) = msg else { break };
                         let msg = msg?;
-                        match &msg {
-                            Message::Binary(_) | Message::Ping(_) => {
-                                let _ = host_tx.send(msg).await;
+                        match msg {
+                            Message::Binary(data) => {
+                                let _ = host_tx.send(Message::Binary(data)).await;
                             }
+                            Message::Ping(data) => {
+                                // Respond locally, do NOT forward
+                                ws_write.send(Message::Pong(data)).await?;
+                            }
+                            Message::Pong(_) => {} // ignore
                             Message::Close(_) => break,
                             _ => {}
                         }
@@ -232,6 +252,12 @@ async fn handle_connection(
                     msg = rx.recv() => {
                         let Some(msg) = msg else { break };
                         ws_write.send(msg).await?;
+                    }
+                    // Server-side keepalive to prevent NAT timeout
+                    _ = ping_interval.tick() => {
+                        if ws_write.send(Message::Ping(vec![])).await.is_err() {
+                            break;
+                        }
                     }
                 }
             }

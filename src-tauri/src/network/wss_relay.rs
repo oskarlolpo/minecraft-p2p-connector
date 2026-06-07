@@ -30,7 +30,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpStream, UdpSocket},
     sync::{mpsc, oneshot, Mutex},
     task::JoinHandle,
     time::timeout,
@@ -50,6 +50,7 @@ const FRAME_READY: u8 = 5;
 const FRAME_ERROR: u8 = 6;
 const FRAME_PING: u8 = 7;
 const FRAME_DATA_ZSTD: u8 = 8; // Zstd-compressed DATA frame
+const FRAME_PONG: u8 = 9;
 
 // Only compress DATA payloads above this threshold (bytes).
 // Small frames have negligible savings but add CPU overhead.
@@ -64,7 +65,7 @@ const TCP_WRITE_QUEUE: usize = 64;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const READY_TIMEOUT: Duration = Duration::from_secs(12);
 const RECONNECT_DELAY: Duration = Duration::from_millis(2_000);
-const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(25);
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(2);
 
 const DEFAULT_WSS_RELAY_URL: &str = "ws://2.26.87.126:8443/ws";
 
@@ -253,7 +254,7 @@ async fn host_session(
         }
     });
 
-    // Keepalive task
+    // Keepalive — use WS-level Ping so relay server & NAT see real activity
     let ping_tx = ws_tx.clone();
     let ping_cancel = cancel.clone();
     let ping_task = tokio::spawn(async move {
@@ -261,8 +262,7 @@ async fn host_session(
             tokio::select! {
                 _ = ping_cancel.cancelled() => break,
                 _ = tokio::time::sleep(KEEPALIVE_INTERVAL) => {
-                    let frame = encode_frame(FRAME_PING, 0, &[]);
-                    if ping_tx.send(Message::Binary(frame)).await.is_err() {
+                    if ping_tx.send(Message::Ping(vec![])).await.is_err() {
                         break;
                     }
                 }
@@ -324,45 +324,184 @@ async fn handle_host_frame(
                 return Ok(());
             }
 
-            let target_addr = proxy::minecraft_local_addr(local_game_port);
-            match TcpStream::connect(&target_addr).await {
-                Ok(tcp_stream) => {
-                    let (reader, writer) = tcp_stream.into_split();
-                    let (tx, rx) = mpsc::channel::<Vec<u8>>(TCP_WRITE_QUEUE);
-                    streams.lock().await.insert(frame.stream_id, tx);
+            let is_udp = frame.payload.len() == 1 && frame.payload[0] == 1;
+            if is_udp {
+                let target_addr: std::net::SocketAddr = match format!("127.0.0.1:{}", local_game_port).parse() {
+                    Ok(addr) => addr,
+                    Err(e) => {
+                        let err_frame = encode_frame(
+                            FRAME_ERROR,
+                            frame.stream_id,
+                            e.to_string().as_bytes(),
+                        );
+                        let _ = ws_tx.send(Message::Binary(err_frame)).await;
+                        let close_frame = encode_frame(FRAME_CLOSE, frame.stream_id, &[]);
+                        let _ = ws_tx.send(Message::Binary(close_frame)).await;
+                        return Ok(());
+                    }
+                };
 
-                    // TCP writer — drains channel into TCP
-                    let w_streams = streams.clone();
-                    let w_cancel = cancel.clone();
-                    let w_stream_id = frame.stream_id;
-                    tokio::spawn(async move {
-                        pump_channel_to_writer(writer, rx, w_streams, w_stream_id, w_cancel).await;
-                    });
+                match UdpSocket::bind("127.0.0.1:0").await {
+                    Ok(udp_socket) => {
+                        let udp_socket = Arc::new(udp_socket);
+                        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(TCP_WRITE_QUEUE);
+                        streams.lock().await.insert(frame.stream_id, tx);
 
-                    // TCP reader — pumps TCP into WebSocket
-                    let r_ws_tx = ws_tx.clone();
-                    let r_streams = streams.clone();
-                    let r_cancel = cancel.clone();
-                    let r_stream_id = frame.stream_id;
-                    tokio::spawn(async move {
-                        pump_reader_to_ws(reader, r_ws_tx, r_streams, r_stream_id, r_cancel).await;
-                    });
+                        // UDP writer — drains channel into UDP socket
+                        let w_socket = udp_socket.clone();
+                        let w_cancel = cancel.clone();
+                        tokio::spawn(async move {
+                            loop {
+                                tokio::select! {
+                                    _ = w_cancel.cancelled() => break,
+                                    payload = rx.recv() => {
+                                        let Some(payload) = payload else { break };
+                                        let _ = w_socket.send_to(&payload, target_addr).await;
+                                    }
+                                }
+                            }
+                        });
+
+                        // UDP reader — pumps UDP packets into WebSocket
+                        let r_socket = udp_socket.clone();
+                        let r_ws_tx = ws_tx.clone();
+                        let r_streams = streams.clone();
+                        let r_cancel = cancel.clone();
+                        let r_stream_id = frame.stream_id;
+                        tokio::spawn(async move {
+                            let mut buf = vec![0u8; 65507];
+                            loop {
+                                let recv = tokio::select! {
+                                    _ = r_cancel.cancelled() => break,
+                                    r = r_socket.recv_from(&mut buf) => r,
+                                };
+                                match recv {
+                                    Ok((n, _addr)) => {
+                                        let frame = encode_frame(FRAME_DATA, r_stream_id, &buf[..n]);
+                                        if r_ws_tx.send(Message::Binary(frame)).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+                            r_streams.lock().await.remove(&r_stream_id);
+                        });
+                    }
+                    Err(error) => {
+                        let err_frame = encode_frame(
+                            FRAME_ERROR,
+                            frame.stream_id,
+                            error.to_string().as_bytes(),
+                        );
+                        let _ = ws_tx.send(Message::Binary(err_frame)).await;
+                        let close_frame = encode_frame(FRAME_CLOSE, frame.stream_id, &[]);
+                        let _ = ws_tx.send(Message::Binary(close_frame)).await;
+                    }
                 }
-                Err(error) => {
-                    let err_frame = encode_frame(
-                        FRAME_ERROR,
-                        frame.stream_id,
-                        error.to_string().as_bytes(),
-                    );
-                    let _ = ws_tx.send(Message::Binary(err_frame)).await;
-                    let close_frame = encode_frame(FRAME_CLOSE, frame.stream_id, &[]);
-                    let _ = ws_tx.send(Message::Binary(close_frame)).await;
+            } else {
+                let target_addr = proxy::minecraft_local_addr(local_game_port);
+                match TcpStream::connect(&target_addr).await {
+                    Ok(tcp_stream) => {
+                        let (reader, writer) = tcp_stream.into_split();
+                        let (tx, rx) = mpsc::channel::<Vec<u8>>(TCP_WRITE_QUEUE);
+                        streams.lock().await.insert(frame.stream_id, tx);
+
+                        // TCP writer — drains channel into TCP
+                        let w_streams = streams.clone();
+                        let w_cancel = cancel.clone();
+                        let w_stream_id = frame.stream_id;
+                        tokio::spawn(async move {
+                            pump_channel_to_writer(writer, rx, w_streams, w_stream_id, w_cancel).await;
+                        });
+
+                        // TCP reader — pumps TCP into WebSocket
+                        let r_ws_tx = ws_tx.clone();
+                        let r_streams = streams.clone();
+                        let r_cancel = cancel.clone();
+                        let r_stream_id = frame.stream_id;
+                        tokio::spawn(async move {
+                            pump_reader_to_ws(reader, r_ws_tx, r_streams, r_stream_id, r_cancel).await;
+                        });
+                    }
+                    Err(error) => {
+                        let err_frame = encode_frame(
+                            FRAME_ERROR,
+                            frame.stream_id,
+                            error.to_string().as_bytes(),
+                        );
+                        let _ = ws_tx.send(Message::Binary(err_frame)).await;
+                        let close_frame = encode_frame(FRAME_CLOSE, frame.stream_id, &[]);
+                        let _ = ws_tx.send(Message::Binary(close_frame)).await;
+                    }
                 }
             }
         }
         FRAME_DATA => {
-            if let Some(tx) = streams.lock().await.get(&frame.stream_id).cloned() {
-                let _ = tx.send(frame.payload.to_vec()).await;
+            let stream_id = frame.stream_id;
+            let mut got_stream = false;
+            {
+                let mut streams_guard = streams.lock().await;
+                if streams_guard.contains_key(&stream_id) {
+                    got_stream = true;
+                } else if stream_id == 0 {
+                    // Try to initialize UDP socket for stream_id = 0 dynamically!
+                    let parsed_addr: Result<std::net::SocketAddr, _> = format!("127.0.0.1:{}", local_game_port).parse();
+                    if let Ok(target_addr) = parsed_addr {
+                        if let Ok(udp_socket) = UdpSocket::bind("127.0.0.1:0").await {
+                            let udp_socket = Arc::new(udp_socket);
+                            let (tx, mut rx) = mpsc::channel::<Vec<u8>>(TCP_WRITE_QUEUE);
+                            streams_guard.insert(0, tx);
+                            got_stream = true;
+
+                            // Host UDP writer for stream 0
+                            let w_socket = udp_socket.clone();
+                            let w_cancel = cancel.clone();
+                            tokio::spawn(async move {
+                                loop {
+                                    tokio::select! {
+                                        _ = w_cancel.cancelled() => break,
+                                        payload = rx.recv() => {
+                                            let Some(payload) = payload else { break };
+                                            let _ = w_socket.send_to(&payload, target_addr).await;
+                                        }
+                                    }
+                                }
+                            });
+
+                            // Host UDP reader for stream 0
+                            let r_socket = udp_socket.clone();
+                            let r_ws_tx = ws_tx.clone();
+                            let r_streams = streams.clone();
+                            let r_cancel = cancel.clone();
+                            tokio::spawn(async move {
+                                let mut buf = vec![0u8; 65507];
+                                loop {
+                                    let recv = tokio::select! {
+                                        _ = r_cancel.cancelled() => break,
+                                        r = r_socket.recv_from(&mut buf) => r,
+                                    };
+                                    match recv {
+                                        Ok((n, _addr)) => {
+                                            let frame = encode_frame(FRAME_DATA, 0, &buf[..n]);
+                                            if r_ws_tx.send(Message::Binary(frame)).await.is_err() {
+                                                break;
+                                            }
+                                        }
+                                        Err(_) => break,
+                                    }
+                                }
+                                r_streams.lock().await.remove(&0);
+                            });
+                        }
+                    }
+                }
+            }
+
+            if got_stream {
+                if let Some(tx) = streams.lock().await.get(&stream_id).cloned() {
+                    let _ = tx.send(frame.payload.to_vec()).await;
+                }
             }
         }
         FRAME_CLOSE | FRAME_ERROR => {
@@ -389,6 +528,7 @@ async fn handle_host_frame(
 pub async fn start_client_runtime(
     config: WssRelayConfig,
     cancel: CancellationToken,
+    ping_tx: Option<mpsc::Sender<u64>>,
 ) -> Result<(WssRelayRuntime, u16)> {
     let temp_listener = TcpListener::bind("127.0.0.1:0").await?;
     let local_port = temp_listener.local_addr()?.port();
@@ -396,7 +536,13 @@ pub async fn start_client_runtime(
     // Verify connectivity and handshake before returning
     let (ready_tx, ready_rx) = oneshot::channel::<Result<()>>();
 
-    let join_handle = tokio::spawn(client_loop(config, local_port, cancel, Some(ready_tx)));
+    let join_handle = tokio::spawn(client_loop(
+        config,
+        local_port,
+        cancel,
+        Some(ready_tx),
+        ping_tx,
+    ));
 
     // Wait for the relay to become ready (or fail fast)
     timeout(READY_TIMEOUT, ready_rx)
@@ -412,13 +558,14 @@ async fn client_loop(
     local_port: u16,
     cancel: CancellationToken,
     mut ready_signal: Option<oneshot::Sender<Result<()>>>,
+    ping_tx_report: Option<mpsc::Sender<u64>>,
 ) -> Result<()> {
     loop {
         if cancel.is_cancelled() {
             return Ok(());
         }
 
-        let result = client_session(&config, local_port, cancel.clone(), &mut ready_signal).await;
+        let result = client_session(&config, local_port, cancel.clone(), &mut ready_signal, &ping_tx_report).await;
 
         if cancel.is_cancelled() {
             return Ok(());
@@ -429,8 +576,13 @@ async fn client_loop(
                 tracing::info!("WSS relay client session ended cleanly, reconnecting...");
             }
             Err(error) => {
+                let err_str = format!("{error:#}").to_lowercase();
                 if let Some(tx) = ready_signal.take() {
                     let _ = tx.send(Err(anyhow!("{error:#}")));
+                }
+                if err_str.contains("not found") {
+                    tracing::error!("WSS relay session not found (host left), aborting...");
+                    return Err(error);
                 }
                 tracing::warn!("WSS relay client session error: {error:#}, reconnecting...");
             }
@@ -445,6 +597,7 @@ async fn client_session(
     local_port: u16,
     cancel: CancellationToken,
     ready_signal: &mut Option<oneshot::Sender<Result<()>>>,
+    ping_tx_report: &Option<mpsc::Sender<u64>>,
 ) -> Result<()> {
     // 1. Connect to relay
     let (ws_stream, _) = timeout(CONNECT_TIMEOUT, connect_async(&config.relay_url))
@@ -510,7 +663,7 @@ async fn client_session(
         }
     });
 
-    // Keepalive task
+    // End-to-end keepalive ping with timestamp
     let ping_tx = ws_tx.clone();
     let ping_cancel = cancel.clone();
     let ping_task = tokio::spawn(async move {
@@ -518,10 +671,14 @@ async fn client_session(
             tokio::select! {
                 _ = ping_cancel.cancelled() => break,
                 _ = tokio::time::sleep(KEEPALIVE_INTERVAL) => {
-                    let frame = encode_frame(FRAME_PING, 0, &[]);
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+                    let payload = now.to_be_bytes();
+                    let frame = encode_frame(FRAME_PING, 0, &payload);
                     if ping_tx.send(Message::Binary(frame)).await.is_err() {
                         break;
                     }
+                    // Also send standard WS ping
+                    let _ = ping_tx.send(Message::Ping(vec![])).await;
                 }
             }
         }
@@ -620,7 +777,22 @@ async fn client_session(
                     FRAME_CLOSE | FRAME_ERROR => {
                         streams.lock().await.remove(&frame.stream_id);
                     }
-                    FRAME_PING => {} // no-op for keepalive
+                    FRAME_PING => {
+                        let pong = encode_frame(FRAME_PONG, frame.stream_id, &frame.payload);
+                        let _ = ws_tx.send(Message::Binary(pong)).await;
+                    }
+                    FRAME_PONG => {
+                        if frame.payload.len() == 8 {
+                            let mut buf = [0u8; 8];
+                            buf.copy_from_slice(&frame.payload);
+                            let sent_time = u64::from_be_bytes(buf);
+                            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+                            let rtt = now.saturating_sub(sent_time);
+                            if let Some(tx) = ping_tx_report {
+                                let _ = tx.send(rtt).await;
+                            }
+                        }
+                    }
                     _ => {
                         tracing::debug!("WSS relay client: ignoring frame kind {}", frame.kind);
                     }
@@ -637,6 +809,213 @@ async fn client_session(
     write_task.abort();
     ping_task.abort();
     accept_task.abort();
+    Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  UDP CLIENT (Bedrock Edition)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Start a WSS relay session in **UDP client** mode (Minecraft Bedrock Edition).
+///
+/// Binds a local UDP socket and tunnels Bedrock UDP packets over WSS to the
+/// Android host. The host receives them and proxies to its local Minecraft server.
+pub async fn start_client_runtime_udp(
+    config: WssRelayConfig,
+    cancel: CancellationToken,
+    ping_tx: Option<mpsc::Sender<u64>>,
+) -> Result<(WssRelayRuntime, u16)> {
+    let udp = Arc::new(UdpSocket::bind("127.0.0.1:0").await?);
+    let local_port = udp.local_addr()?.port();
+    let (ready_tx, ready_rx) = oneshot::channel::<Result<()>>();
+    let join_handle = tokio::spawn(client_loop_udp(config, udp, cancel, Some(ready_tx), ping_tx));
+    timeout(READY_TIMEOUT, ready_rx)
+        .await
+        .context("WSS relay UDP client ready timed out")?
+        .context("WSS relay UDP client ready channel dropped")??;
+    Ok((WssRelayRuntime { join_handle }, local_port))
+}
+
+async fn client_loop_udp(
+    config: WssRelayConfig,
+    udp: Arc<UdpSocket>,
+    cancel: CancellationToken,
+    mut ready_signal: Option<oneshot::Sender<Result<()>>>,
+    ping_tx_report: Option<mpsc::Sender<u64>>,
+) -> Result<()> {
+    loop {
+        if cancel.is_cancelled() { return Ok(()); }
+        let result = client_session_udp(&config, udp.clone(), cancel.clone(), &mut ready_signal, &ping_tx_report).await;
+        if cancel.is_cancelled() { return Ok(()); }
+        match result {
+            Ok(()) => tracing::info!("WSS relay UDP session ended, reconnecting..."),
+            Err(e) => {
+                if let Some(tx) = ready_signal.take() {
+                    let _ = tx.send(Err(anyhow!("{e:#}")));
+                    return Ok(());
+                }
+                tracing::warn!("WSS relay UDP session error: {e:#}, reconnecting...");
+            }
+        }
+        tokio::time::sleep(RECONNECT_DELAY).await;
+    }
+}
+
+async fn client_session_udp(
+    config: &WssRelayConfig,
+    udp: Arc<UdpSocket>,
+    cancel: CancellationToken,
+    ready_signal: &mut Option<oneshot::Sender<Result<()>>>,
+    ping_tx_report: &Option<mpsc::Sender<u64>>,
+) -> Result<()> {
+    // 1. Connect
+    let (ws_stream, _) = timeout(CONNECT_TIMEOUT, connect_async(&config.relay_url))
+        .await
+        .context("WSS relay UDP connect timed out")?
+        .context("WSS relay UDP connect failed")?;
+    let (mut ws_write, mut ws_read) = ws_stream.split();
+
+    // 2. Join handshake
+    let join_msg = serde_json::to_string(&HandshakeMessage::ClientJoin {
+        session_id: config.session_id.clone(),
+    })?;
+    ws_write.send(Message::Text(join_msg)).await?;
+
+    // 3. Wait for Linked
+    let ack = timeout(CONNECT_TIMEOUT, ws_read.next())
+        .await
+        .context("WSS relay UDP join timed out")?
+        .ok_or_else(|| anyhow!("WSS relay UDP closed during join"))?
+        .context("WSS relay UDP read error")?;
+    match ack {
+        Message::Text(text) => {
+            match serde_json::from_str::<HandshakeMessage>(&text)? {
+                HandshakeMessage::Linked { .. } => {}
+                HandshakeMessage::Error { message } => return Err(anyhow!("relay error: {message}")),
+                other => return Err(anyhow!("unexpected UDP handshake: {other:?}")),
+            }
+        }
+        _ => return Err(anyhow!("unexpected WSS message type during UDP join")),
+    }
+
+    // 4. Send HELLO
+    ws_write.send(Message::Binary(encode_frame(FRAME_HELLO, 0, &[]))).await?;
+
+    // 5. WS write channel
+    let (ws_tx, mut ws_rx) = mpsc::channel::<Message>(WS_WRITE_QUEUE);
+    let write_cancel = cancel.clone();
+    let write_task = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = write_cancel.cancelled() => break,
+                msg = ws_rx.recv() => {
+                    let Some(msg) = msg else { break };
+                    if ws_write.send(msg).await.is_err() { break; }
+                }
+            }
+        }
+    });
+
+    // Keepalive ping loop
+    let ping_tx = ws_tx.clone();
+    let ping_cancel = cancel.clone();
+    let ping_task = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = ping_cancel.cancelled() => break,
+                _ = tokio::time::sleep(KEEPALIVE_INTERVAL) => {
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+                    let payload = now.to_be_bytes();
+                    let frame = encode_frame(FRAME_PING, 0, &payload);
+                    if ping_tx.send(Message::Binary(frame)).await.is_err() {
+                        break;
+                    }
+                    if ping_tx.send(Message::Ping(vec![])).await.is_err() { break; }
+                }
+            }
+        }
+    });
+
+    // 6. UDP recv task → DATA frames over WSS
+    // Tracks last sender so we can route responses back
+    let last_client_addr: Arc<Mutex<Option<std::net::SocketAddr>>> = Arc::new(Mutex::new(None));
+    let udp_recv = udp.clone();
+    let udp_ws_tx = ws_tx.clone();
+    let udp_cancel = cancel.clone();
+    let last_addr_w = last_client_addr.clone();
+    let udp_recv_task = tokio::spawn(async move {
+        let mut buf = vec![0u8; 65507];
+        loop {
+            let recv = tokio::select! {
+                _ = udp_cancel.cancelled() => break,
+                r = udp_recv.recv_from(&mut buf) => r,
+            };
+            match recv {
+                Ok((n, addr)) => {
+                    *last_addr_w.lock().await = Some(addr);
+                    let frame = encode_frame(FRAME_DATA, 0, &buf[..n]);
+                    if udp_ws_tx.send(Message::Binary(frame)).await.is_err() { break; }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    // 7. WSS read loop → route DATA frames back to Minecraft Bedrock client via UDP
+    let mut got_ready = false;
+    loop {
+        let msg = tokio::select! {
+            _ = cancel.cancelled() => break,
+            msg = ws_read.next() => msg,
+        };
+        let Some(msg) = msg else { break };
+        let msg = msg.context("WSS relay UDP read error")?;
+
+        match msg {
+            Message::Binary(data) => {
+                let frame = decode_frame(&data)?;
+                match frame.kind {
+                    FRAME_READY => {
+                        if !got_ready {
+                            got_ready = true;
+                            if let Some(tx) = ready_signal.take() {
+                                let _ = tx.send(Ok(()));
+                            }
+                        }
+                    }
+                    FRAME_DATA => {
+                        if let Some(addr) = *last_client_addr.lock().await {
+                            let _ = udp.send_to(frame.payload.as_ref(), addr).await;
+                        }
+                    }
+                    FRAME_PING => {
+                        let pong = encode_frame(FRAME_PONG, frame.stream_id, frame.payload.as_ref());
+                        let _ = ws_tx.send(Message::Binary(pong)).await;
+                    }
+                    FRAME_PONG => {
+                        if frame.payload.len() == 8 {
+                            let mut buf = [0u8; 8];
+                            buf.copy_from_slice(frame.payload.as_ref());
+                            let sent_time = u64::from_be_bytes(buf);
+                            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+                            let rtt = now.saturating_sub(sent_time);
+                            if let Some(tx) = ping_tx_report {
+                                let _ = tx.send(rtt).await;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Message::Ping(data) => { let _ = ws_tx.send(Message::Pong(data)).await; }
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+
+    write_task.abort();
+    ping_task.abort();
+    udp_recv_task.abort();
     Ok(())
 }
 
@@ -709,7 +1088,7 @@ async fn pump_channel_to_writer<W: tokio::io::AsyncWrite + Unpin>(
 struct Frame<'a> {
     kind: u8,
     stream_id: u64,
-    payload: &'a [u8],
+    payload: std::borrow::Cow<'a, [u8]>,
 }
 
 fn encode_frame(kind: u8, stream_id: u64, payload: &[u8]) -> Vec<u8> {
@@ -730,21 +1109,18 @@ fn decode_frame(data: &[u8]) -> Result<Frame<'_>> {
 
     // Transparent zstd decompression for FRAME_DATA_ZSTD
     if kind == FRAME_DATA_ZSTD {
-        // We can't return a borrowed slice for decompressed data in Frame<'_>,
-        // so we return the raw payload and let the caller decompress.
-        // To keep the API simple, we re-tag as FRAME_DATA here.
-        // The actual decompression happens inline in the handler.
+        let decompressed = zstd_decompress_data(payload)?;
         return Ok(Frame {
             kind: FRAME_DATA,
             stream_id,
-            payload,
+            payload: std::borrow::Cow::Owned(decompressed),
         });
     }
 
     Ok(Frame {
         kind,
         stream_id,
-        payload,
+        payload: std::borrow::Cow::Borrowed(payload),
     })
 }
 

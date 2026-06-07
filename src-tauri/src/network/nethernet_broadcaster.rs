@@ -19,6 +19,9 @@ pub struct NetherNetBroadcaster {
 impl NetherNetBroadcaster {
     pub async fn start(
         room_name: String,
+        host_name: String,
+        _mc_version: String,
+        slots: String,
         proxy_port: u16,
         cancel: CancellationToken,
     ) -> Result<Self> {
@@ -49,6 +52,8 @@ impl NetherNetBroadcaster {
                                         &key,
                                         server_id,
                                         &room_name,
+                                        &host_name,
+                                        &slots,
                                         proxy_port,
                                     );
 
@@ -83,7 +88,7 @@ impl NetherNetBroadcaster {
         key
     }
 
-    fn build_response_packet(key: &[u8; 32], sender_id: u64, room_name: &str, _proxy_port: u16) -> Vec<u8> {
+    fn build_response_packet(key: &[u8; 32], sender_id: u64, room_name: &str, host_name: &str, slots: &str, _proxy_port: u16) -> Vec<u8> {
         let mut server_data = Vec::new();
         server_data.push(4u8); // version = 4
         
@@ -91,14 +96,21 @@ impl NetherNetBroadcaster {
         server_data.push(server_name_bytes.len() as u8);
         server_data.extend_from_slice(server_name_bytes);
         
-        let level_name = "P2P Connector";
+        let level_name = host_name;
         let level_name_bytes = level_name.as_bytes();
         server_data.push(level_name_bytes.len() as u8);
         server_data.extend_from_slice(level_name_bytes);
+
+        let parts: Vec<&str> = slots.split('/').collect();
+        let (players, max_players) = if parts.len() == 2 {
+            (parts[0].parse::<i32>().unwrap_or(0), parts[1].parse::<i32>().unwrap_or(30))
+        } else {
+            (0, 30)
+        };
         
         server_data.push(0u8); // GameType = Survival
-        server_data.extend_from_slice(&1i32.to_le_bytes()); // PlayerCount
-        server_data.extend_from_slice(&30i32.to_le_bytes()); // MaxPlayerCount
+        server_data.extend_from_slice(&players.to_le_bytes()); // PlayerCount
+        server_data.extend_from_slice(&max_players.to_le_bytes()); // MaxPlayerCount
         server_data.push(0u8); // EditorWorld
         server_data.push(0u8); // Hardcore
         server_data.push(4u8); // TransportLayer

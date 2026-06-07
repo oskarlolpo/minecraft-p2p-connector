@@ -8,7 +8,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 const DEFAULT_STUN_SERVERS: &str =
-    "stun.cloudflare.com:3478,stun.l.google.com:19302,stun1.l.google.com:19302";
+    "stun.yandex.ru:3478,stun.sipnet.net:3478,stun.cloudflare.com:3478,stun.l.google.com:19302";
 const PUNCH_FAST_BURST_PACKETS: usize = 40;
 const PUNCH_FAST_BURST_DELAY_MS: u64 = 30;
 const PUNCH_SUSTAIN_PACKETS: usize = 100;

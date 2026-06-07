@@ -26,8 +26,8 @@ use super::{
 };
 
 const ABLY_SIGNAL_LABEL: &str = "Ably Presence + Channels";
-const CLIENT_CONNECT_RETRY_ATTEMPTS: usize = 12;
-const CLIENT_CONNECT_TIMEOUT_MS: u64 = 2000;
+const CLIENT_CONNECT_RETRY_ATTEMPTS: usize = 3;
+const CLIENT_CONNECT_TIMEOUT_MS: u64 = 1500;
 const CLIENT_CONNECT_DELAY_MS: u64 = 250;
 const HOST_PUNCH_GRACE_MS: u64 = 1800;
 
@@ -76,6 +76,10 @@ struct ClientControl {
 struct PreparedClientControl {
     peer_addr: SocketAddr,
     peer_id: String,
+    room_name: String,
+    host_name: String,
+    mc_version: String,
+    slots: String,
     punch_socket: Arc<UdpSocket>,
     endpoint: Endpoint,
 }
@@ -211,6 +215,7 @@ impl NetworkManager {
             peer_addr,
             peer_id.unwrap_or_else(|| peer_addr.to_string()),
             relay_session_id,
+            false, // connect_to_peer doesn't know host type; default TCP
         )
         .await
     }
@@ -219,6 +224,10 @@ impl NetworkManager {
         &self,
         peer_addr: String,
         peer_id: Option<String>,
+        room_name: Option<String>,
+        host_name: Option<String>,
+        mc_version: Option<String>,
+        slots: Option<String>,
     ) -> Result<()> {
         let peer_addr = peer_addr.trim().to_string();
         if peer_addr.is_empty() {
@@ -234,7 +243,14 @@ impl NetworkManager {
         self.reset_session().await;
 
         let (prepared, udp_bind_addr, public_udp_addr_opt) = self
-            .prepare_client_control(peer_addr, peer_id.clone())
+            .prepare_client_control(
+                peer_addr,
+                peer_id.clone(),
+                room_name.unwrap_or_else(|| format!("P2P {}", peer_id)),
+                host_name.unwrap_or_else(|| peer_id.clone()),
+                mc_version.unwrap_or_else(|| "Unknown".to_string()),
+                slots.unwrap_or_else(|| "1/30".to_string()),
+            )
             .await?;
         let cancel = CancellationToken::new();
 
@@ -276,6 +292,7 @@ impl NetworkManager {
         &self,
         app: AppHandle,
         relay_session_id: Option<String>,
+        use_udp: bool,
     ) -> Result<()> {
         let _guard = self.inner.control.lock().await;
         let mut session = self.inner.session.lock().await;
@@ -312,7 +329,12 @@ impl NetworkManager {
             prepared.endpoint,
             peer_addr,
             prepared.peer_id,
+            prepared.room_name,
+            prepared.host_name,
+            prepared.mc_version,
+            prepared.slots,
             relay_session_id,
+            use_udp,
             reconnect_cancel,
         );
 
@@ -598,9 +620,17 @@ impl NetworkManager {
         peer_addr: SocketAddr,
         peer_id: String,
         relay_session_id: Option<String>,
+        use_udp: bool,
     ) -> Result<()> {
         let (prepared, udp_bind_addr, public_udp_addr_opt) = self
-            .prepare_client_control(peer_addr, peer_id.clone())
+            .prepare_client_control(
+                peer_addr,
+                peer_id.clone(),
+                format!("P2P {}", peer_id),
+                peer_id.clone(),
+                "Unknown".to_string(),
+                "1/30".to_string(),
+            )
             .await?;
         let cancel = CancellationToken::new();
 
@@ -633,7 +663,12 @@ impl NetworkManager {
             prepared.endpoint,
             peer_addr,
             prepared.peer_id,
+            prepared.room_name,
+            prepared.host_name,
+            prepared.mc_version,
+            prepared.slots,
             relay_session_id,
+            use_udp,
             cancel.clone(),
         );
 
@@ -650,6 +685,10 @@ impl NetworkManager {
         &self,
         peer_addr: SocketAddr,
         peer_id: String,
+        room_name: String,
+        host_name: String,
+        mc_version: String,
+        slots: String,
     ) -> Result<(PreparedClientControl, SocketAddr, Option<SocketAddr>)> {
         let (udp_socket, punch_socket, udp_bind_addr) = Self::bind_shared_udp_socket()?;
         let public_udp_addr_res = discover_public_addr(punch_socket.clone(), &self.inner.stun).await;
@@ -675,6 +714,10 @@ impl NetworkManager {
             PreparedClientControl {
                 peer_addr,
                 peer_id,
+                room_name,
+                host_name,
+                mc_version,
+                slots,
                 punch_socket,
                 endpoint,
             },
@@ -690,7 +733,12 @@ impl NetworkManager {
         endpoint: Endpoint,
         peer_addr: SocketAddr,
         peer_id: String,
+        room_name: String,
+        host_name: String,
+        mc_version: String,
+        slots: String,
         relay_session_id: Option<String>,
+        use_udp: bool,
         cancel: CancellationToken,
     ) -> JoinHandle<()> {
         let manager = self.clone();
@@ -702,7 +750,12 @@ impl NetworkManager {
                     endpoint,
                     peer_addr,
                     peer_id.clone(),
+                    room_name.clone(),
+                    host_name.clone(),
+                    mc_version.clone(),
+                    slots.clone(),
                     relay_session_id,
+                    use_udp,
                     cancel.clone(),
                 )
                 .await
@@ -728,7 +781,12 @@ impl NetworkManager {
         endpoint: Endpoint,
         peer_addr: SocketAddr,
         peer_id: String,
+        room_name: String,
+        host_name: String,
+        mc_version: String,
+        slots: String,
         relay_session_id: Option<String>,
+        use_udp: bool,
         cancel: CancellationToken,
     ) -> Result<()> {
         self.mutate_status(|status| {
@@ -776,7 +834,7 @@ impl NetworkManager {
                     ))
                     .await;
                     return self
-                        .run_relay_client_tunnel(app, peer_addr, peer_id, session_id, cancel)
+                        .run_relay_client_tunnel(app, peer_addr, peer_id, room_name, host_name, mc_version, slots, session_id, use_udp, cancel)
                         .await
                         .map_err(|relay_error| {
                             anyhow!(
@@ -821,14 +879,20 @@ impl NetworkManager {
         );
 
                         let _nethernet = super::nethernet_broadcaster::NetherNetBroadcaster::start(
-            format!("P2P {}", peer_id),
-            19132,
+            room_name.clone(),
+            host_name.clone(),
+            mc_version.clone(),
+            slots.clone(),
+            local_port,
             cancel.clone(),
         ).await;
 
         let _broadcaster = super::bedrock_broadcaster::BedrockBroadcaster::start(
-            format!("P2P {}", peer_id),
-            19132,
+            room_name.clone(),
+            host_name.clone(),
+            mc_version.clone(),
+            slots.clone(),
+            local_port,
             cancel.clone(),
         ).await;
 
@@ -1109,28 +1173,67 @@ impl NetworkManager {
         app: AppHandle,
         peer_addr: SocketAddr,
         peer_id: String,
+        room_name: String,
+        host_name: String,
+        mc_version: String,
+        slots: String,
         session_id: String,
+        use_udp: bool,
         cancel: CancellationToken,
     ) -> Result<()> {
         self.mutate_status(|status| {
             status.state = ConnectionState::Connecting;
             status.transport_path = Some("wss-relay".into());
             status.note = Some(
-                "Используется резервный WSS туннель (порт 443)."
-                    .into(),
+                format!("Используется резервный WSS туннель ({}).",
+                    if use_udp { "UDP/Bedrock" } else { "TCP/Java" })
             );
         })
         .await;
 
         let mut relay_config = self.inner.wss_relay_config.clone();
         relay_config.session_id = session_id.clone();
-        
-        let (runtime, local_port) = wss_relay::start_client_runtime(
-            relay_config,
-            cancel.clone(),
-        )
-        .await
+
+        let (ping_tx, mut ping_rx) = tokio::sync::mpsc::channel::<u64>(8);
+        let manager_clone = self.clone();
+        let peer_id_clone = peer_id.clone();
+        let app_clone = app.clone();
+        tokio::spawn(async move {
+            while let Some(rtt) = ping_rx.recv().await {
+                manager_clone.update_peer_ping(&peer_id_clone, rtt).await;
+                let _ = app_clone.emit("peer-health", serde_json::json!({
+                    "peerId": peer_id_clone,
+                    "pingMs": rtt,
+                    "bytesRx": 0,
+                    "bytesTx": 0
+                }));
+            }
+        });
+
+        let (runtime, local_port) = if use_udp {
+            wss_relay::start_client_runtime_udp(relay_config, cancel.clone(), Some(ping_tx)).await
+        } else {
+            wss_relay::start_client_runtime(relay_config, cancel.clone(), Some(ping_tx)).await
+        }
         .with_context(|| format!("failed to start WSS relay client session {session_id}"))?;
+
+        let _nethernet = super::nethernet_broadcaster::NetherNetBroadcaster::start(
+            room_name.clone(),
+            host_name.clone(),
+            mc_version.clone(),
+            slots.clone(),
+            local_port,
+            cancel.clone(),
+        ).await;
+
+        let _broadcaster = super::bedrock_broadcaster::BedrockBroadcaster::start(
+            room_name.clone(),
+            host_name.clone(),
+            mc_version.clone(),
+            slots.clone(),
+            local_port,
+            cancel.clone(),
+        ).await;
 
         self.mutate_status(|status| {
             status.state = ConnectionState::Connected;
