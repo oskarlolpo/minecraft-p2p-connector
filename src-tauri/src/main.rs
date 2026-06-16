@@ -181,16 +181,19 @@ async fn connect_to_peer(
         }
     }
 
-    for addr in &peer_addrs {
-        if let Some(socket) = multiaddr_or_socket_to_socket(addr).and_then(|a| a.parse::<std::net::SocketAddr>().ok()) {
-            if let std::net::IpAddr::V4(ipv4) = socket.ip() {
-                if ipv4.is_private() {
-                    local_addr = Some(socket);
+    for raw_addr in &peer_addrs {
+        for addr in raw_addr.split(',') {
+            let addr = addr.trim();
+            if let Some(socket) = multiaddr_or_socket_to_socket(addr).and_then(|a| a.parse::<std::net::SocketAddr>().ok()) {
+                if let std::net::IpAddr::V4(ipv4) = socket.ip() {
+                    if ipv4.is_private() {
+                        local_addr = Some(socket);
+                    } else if chosen_addr.is_none() {
+                        chosen_addr = Some(socket);
+                    }
                 } else if chosen_addr.is_none() {
                     chosen_addr = Some(socket);
                 }
-            } else if chosen_addr.is_none() {
-                chosen_addr = Some(socket);
             }
         }
     }
@@ -254,16 +257,19 @@ async fn prepare_client_connect(
         }
     }
 
-    for addr in &peer_addrs {
-        if let Some(socket) = multiaddr_or_socket_to_socket(addr).and_then(|a| a.parse::<std::net::SocketAddr>().ok()) {
-            if let std::net::IpAddr::V4(ipv4) = socket.ip() {
-                if ipv4.is_private() {
-                    local_addr = Some(socket);
+    for raw_addr in &peer_addrs {
+        for addr in raw_addr.split(',') {
+            let addr = addr.trim();
+            if let Some(socket) = multiaddr_or_socket_to_socket(addr).and_then(|a| a.parse::<std::net::SocketAddr>().ok()) {
+                if let std::net::IpAddr::V4(ipv4) = socket.ip() {
+                    if ipv4.is_private() {
+                        local_addr = Some(socket);
+                    } else if chosen_addr.is_none() {
+                        chosen_addr = Some(socket);
+                    }
                 } else if chosen_addr.is_none() {
                     chosen_addr = Some(socket);
                 }
-            } else if chosen_addr.is_none() {
-                chosen_addr = Some(socket);
             }
         }
     }
@@ -363,8 +369,9 @@ async fn publish_lobby_event(state: State<'_, AppState>, channel: String, event:
 }
 
 #[tauri::command]
-fn subscribe_lobby_events(app: AppHandle, state: State<'_, AppState>, channel: String) {
+async fn subscribe_lobby_events(app: AppHandle, state: State<'_, AppState>, channel: String) -> Result<(), String> {
     state.manager.subscribe_lobby_events(wrap_app_handle(app), channel, tokio_util::sync::CancellationToken::new());
+    Ok(())
 }
 
 #[tauri::command]
@@ -630,6 +637,35 @@ async fn install_update_impl() -> anyhow::Result<InstallUpdateResult> {
 }
 
 fn main() {
+    std::panic::set_hook(Box::new(|panic_info| {
+        let mut log_dir = std::env::var("LOCALAPPDATA")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+        log_dir.push("P2PConnector");
+        log_dir.push("logs");
+        let _ = std::fs::create_dir_all(&log_dir);
+        let log_file = log_dir.join("crash.log");
+        
+        let payload = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Unknown payload".to_string()
+        };
+        
+        let location = panic_info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_else(|| "unknown".to_string());
+        let bt = std::backtrace::Backtrace::force_capture();
+        let msg = format!("Panic at {location}:\nPayload: {payload}\nBacktrace:\n{bt}\n\n=================================\n\n");
+        
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_file) {
+            use std::io::Write;
+            let _ = f.write_all(msg.as_bytes());
+        }
+        
+        eprintln!("{msg}");
+    }));
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import HostModal from '../components/HostModal.vue'
 import ConnectModal from '../components/ConnectModal.vue'
 import PeerList from '../components/PeerList.vue'
@@ -61,6 +62,7 @@ const handleStartHost = async (config) => {
       geyserPort: config.geyserPort,
       enableE4mc: false,
     })
+    emit('host-started', config.password || null)
     isHostModalOpen.value = false
   } catch (e) {
     alert('Ошибка запуска: ' + e)
@@ -83,10 +85,16 @@ const handleConnect = async ({ password }) => {
   const s = connectModal.value.server
   if (!s) return
   try {
+    // Собираем все адреса (публичный + локальные) — Rust сам выберет лучший
     const addrs = [
-      s.public_join_address || s.endpoint || s.serverIp || s.server_ip || '0.0.0.0:19132',
-      ...(s.local_ip ? s.local_ip.split(',') : [])
+      s.public_join_address || s.endpoint || s.serverIp || s.server_ip,
+      ...(s.local_ip ? s.local_ip.split(',').map(a => a.trim()).filter(Boolean) : [])
     ].filter(Boolean)
+
+    if (addrs.length === 0) {
+      alert('Нет адресов для подключения')
+      return
+    }
 
     await invoke('prepare_client_connect', {
       peerId: s.client_id || s.peer_id || s.id || '',
@@ -97,26 +105,76 @@ const handleConnect = async ({ password }) => {
       slots: s.slots || s.players || '1/30'
     })
     
-    // 2. Fetch our allocated endpoint
+    // 2. Получаем наш публичный UDP адрес после STUN
     const currentStatus = await invoke('get_status')
-    const myUdpAddr = currentStatus.publicUdpAddr || currentStatus.udpBindAddr || ''
+    const myUdpAddr = currentStatus?.publicUdpAddr || currentStatus?.udpBindAddr || ''
     
-    // 3. Notify the host so they can punch NAT to us
+    // 3. Генерируем ID этой сессии
+    const myClientId = 'desktop-client-' + Math.floor(Math.random() * 100000)
+    const relaySessionId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : ('relay-' + Date.now())
+
+    // 4. Подписываемся на ответ хоста (наш личный канал)
+    invoke('subscribe_lobby_events', { channel: `lobby:${myClientId}` }).catch(() => {})
+    
+    // 5. Ждём connect-ack через tauri event
+    const ackPromise = new Promise((resolve) => {
+      let unlisten = null
+      listen('lobby-event', (event) => {
+        try {
+          const raw = event.payload              // { channel, data }
+          const ablyMsg = raw?.data || {}        // Ably message: { name, data }
+          const evName = ablyMsg?.name || ''
+          if (evName !== 'connect-ack') return
+          
+          // Ably data может быть JSON-строкой
+          let innerData = ablyMsg?.data
+          if (typeof innerData === 'string') {
+            try { innerData = JSON.parse(innerData) } catch (_) {}
+          }
+          const data = innerData || {}
+          
+          if (unlisten) unlisten()
+          resolve(data)
+        } catch (_) {}
+      }).then(fn => { unlisten = fn })
+      setTimeout(() => {
+        if (unlisten) unlisten()
+        resolve(null)
+      }, 12000)
+    })
+
+    // 6. Отправляем connect-request хосту
     await invoke('publish_lobby_event', {
       channel: `lobby:${s.client_id || s.peer_id || s.id}`,
       event: 'connect-request',
       payload: {
-        client_id: currentStatus.peers?.[0]?.peer_id || 'desktop-client',
+        client_id: myClientId,
         peer_addr: myUdpAddr,
-        relay_session_id: 'no-relay-yet'
+        relay_session_id: relaySessionId,
+        password: password || null
       }
     })
     
-    // 4. Commit the connection (without relay for now)
-    await invoke('commit_prepared_client_connect', {
-      relaySessionId: null,
-      useUdp: true
-    })
+    // 7. Ждём ответа хоста
+    const ack = await ackPromise
+    
+    if (ack && ack.accepted === true) {
+      // 8. Открываем QUIC туннель
+      await invoke('commit_prepared_client_connect', {
+        relaySessionId: relaySessionId,
+        useUdp: true
+      })
+    } else if (ack && ack.accepted === false) {
+      alert('Хост отклонил запрос (неверный пароль или занято)')
+    } else {
+      // Таймаут — хост возможно не Desktop (Android не посылает ack), всё равно коммитим
+      await invoke('commit_prepared_client_connect', {
+        relaySessionId: relaySessionId,
+        useUdp: true
+      })
+    }
     
     connectModal.value = { open: false, server: null }
   } catch (e) {

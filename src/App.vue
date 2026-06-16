@@ -53,6 +53,7 @@ let unlistenPeerDisconnected = null
 
 // ── Incoming connection modal ──────────────────────────────────
 const incomingRequest = ref(null)  // { peerId, peerName, serverId }
+const currentHostPassword = ref(null)
 
 // ── Lifecycle ─────────────────────────────────────────────────
 onMounted(async () => {
@@ -92,22 +93,52 @@ onMounted(async () => {
   invoke('get_status').then(s => { status.value = s }).catch(console.error)
   invoke('refresh_lobby').then(r => { lobbyServers.value = r }).catch(console.error)
 
-  // Tauri event: lobby-event (new server announcements)
+  // Tauri event: lobby-event — обрабатывает все входящие Ably события
+  // Rust эмитит ВСЕ SSE сообщения через 'lobby-event' с полем data (Ably message)
   try {
     unlistenLobbyEvent = await listen('lobby-event', (event) => {
-      addLog(`[Lobby] ${JSON.stringify(event.payload)}`)
-      // Trigger a refresh
-      invoke('refresh_lobby').then(r => { lobbyServers.value = r }).catch(() => {})
+      const raw = event.payload           // { channel, data }
+      const ablyMsg = raw?.data || {}     // Ably message: { name, data, clientId, ... }
+      const evName = ablyMsg?.name || ''
+
+      // Ably кодирует поле data как JSON-строку — парсим
+      let innerData = ablyMsg?.data
+      if (typeof innerData === 'string') {
+        try { innerData = JSON.parse(innerData) } catch (_) {}
+      }
+      
+      if (evName === 'connect-request') {
+        // Входящий запрос на подключение к нашему серверу (Desktop хост)
+        const payload = innerData || {}
+        incomingRequest.value = payload
+        addLog(`Входящий запрос от ${payload?.client_id || payload?.peerId || 'unknown'}`)
+        
+        if (currentHostPassword.value) {
+          if (payload?.password === currentHostPassword.value) {
+            addLog('Пароль верный, авто-принятие.')
+            acceptRequest()
+          } else {
+            addLog('Неверный пароль, отклонено.')
+            declineRequest()
+          }
+        } else {
+          acceptRequest()
+        }
+      } else if (evName === 'connect-ack') {
+        addLog(`[Lobby] connect-ack получен`)
+        // Обрабатывается в HomeView через отдельный listen('lobby-event')
+      } else if (evName === 'host-presence' || evName === '') {
+        // Новый хост появился — обновляем лобби
+        invoke('refresh_lobby').then(r => { lobbyServers.value = r }).catch(() => {})
+      } else {
+        addLog(`[Lobby] ${evName} на ${raw?.channel || '?'}`)
+      }
     })
   } catch (e) { console.warn('lobby-event listener failed:', e) }
 
-  // Tauri event: connect-request (someone wants to join your server)
-  try {
-    unlistenConnectRequest = await listen('connect-request', (event) => {
-      incomingRequest.value = event.payload
-      addLog(`Входящий запрос от ${event.payload?.peerName || event.payload?.peerId}`)
-    })
-  } catch (e) { console.warn('connect-request listener failed:', e) }
+  // NOTE: 'connect-request' direct listener удалён — Rust эмитит всё через 'lobby-event'
+  unlistenConnectRequest = () => {} // no-op для совместимости onUnmounted
+
 
   // Tauri event: peer-connected
   try {
@@ -192,15 +223,31 @@ const handleLogout = async () => {
 const acceptRequest = async () => {
   if (!incomingRequest.value) return
   try {
+    const peerId = incomingRequest.value.client_id || incomingRequest.value.peerId
+    const peerAddr = incomingRequest.value.peer_addr || ''
+    const relaySessionId = incomingRequest.value.relay_session_id || null
+
+    // Отправляем connect-ack клиенту
     await invoke('publish_lobby_event', {
-      channel: 'minecraft-lobby',
-      eventName: 'connect-ack',
-      data: {
-        peerId: incomingRequest.value.peerId,
+      channel: `lobby:${peerId}`,
+      event: 'connect-ack',
+      payload: {
+        relay_session_id: relaySessionId,
+        host_id: 'desktop-host',
         accepted: true
       }
     })
-    addLog(`Принято подключение от ${incomingRequest.value.peerName || incomingRequest.value.peerId}`)
+    
+    // Открываем P2P туннель к клиенту
+    if (peerAddr && peerAddr !== '0.0.0.0:0' && peerAddr !== '') {
+      await invoke('connect_to_peer', {
+        peerId: peerId,
+        peerAddrs: [peerAddr],
+        relaySessionId: relaySessionId
+      })
+    }
+
+    addLog(`Принято подключение от ${peerId}`)
   } catch (e) {
     addLog('Ошибка принятия: ' + e)
   } finally {
@@ -211,15 +258,16 @@ const acceptRequest = async () => {
 const declineRequest = async () => {
   if (!incomingRequest.value) return
   try {
+    const peerId = incomingRequest.value.client_id || incomingRequest.value.peerId;
     await invoke('publish_lobby_event', {
-      channel: 'minecraft-lobby',
-      eventName: 'connect-ack',
-      data: {
-        peerId: incomingRequest.value.peerId,
+      channel: `lobby:${peerId}`,
+      event: 'connect-ack',
+      payload: {
+        peerId: status.value?.peers?.[0]?.peer_id || 'host',
         accepted: false
       }
     })
-    addLog(`Отклонено подключение от ${incomingRequest.value.peerName || incomingRequest.value.peerId}`)
+    addLog(`Отклонено подключение от ${incomingRequest.value.peerName || peerId}`)
   } catch (e) { console.error(e) }
   finally { incomingRequest.value = null }
 }
@@ -275,6 +323,7 @@ const declineRequest = async () => {
         :status="status"
         :servers="lobbyServers"
         @refresh="invoke('refresh_lobby').then(r => { lobbyServers.value = r }).catch(console.error)"
+        @host-started="currentHostPassword = $event"
       />
       <SettingsView
         v-if="activeTab === 'settings'"
